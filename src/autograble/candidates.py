@@ -68,9 +68,10 @@ def select_candidate_columns(
             excluded.setdefault("near_unique", []).append(c)
 
     # Rule: datetime columns (often near-unique)
+
     if exclude_datetimes:
         for c in list(base_cols):
-            if np.issubdtype(df[c].dtype, np.datetime64):
+            if pd.api.types.is_datetime64_any_dtype(df[c]):
                 base_cols.remove(c)
                 excluded.setdefault("datetime", []).append(c)
 
