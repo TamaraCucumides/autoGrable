@@ -10,34 +10,21 @@ from .utils import omega_from_group_sizes, loss_from_proba
 def build_block_probas(
     X_train: pd.DataFrame,
     y_train: pd.Series,
-    cols: List[str],
-) -> Tuple[pd.DataFrame, pd.Series]:
+    cols: list[str],
+) -> tuple[pd.DataFrame, pd.Series]:
     """
-    Build block-conditional class probabilities on train.
-
-    Returns:
-      block_probas: DataFrame indexed by block keys (MultiIndex if cols non-empty),
-                    columns are class labels, values are probabilities.
-      global_proba: Series of class priors.
+    Block-conditional class probabilities estimated on train.
+    Uses hashed block keys to avoid MultiIndex cartesian blow-ups.
     """
     classes = pd.Index(pd.unique(y_train))
     y_cat = pd.Categorical(y_train, categories=classes)
 
-    # Attach y to X_train for groupby convenience
-    tmp = X_train.copy()
-    tmp["__y__"] = y_cat
+    key = make_block_key(X_train, cols)
 
-    if cols:
-        counts = tmp.groupby(cols, sort=False, dropna=False)["__y__"].value_counts().unstack(fill_value=0)
-    else:
-        # Single block
-        counts = pd.DataFrame(
-            [pd.Series(y_cat).value_counts().reindex(classes, fill_value=0).to_numpy()],
-            index=pd.Index([()], name="__all__"),
-            columns=classes,
-        )
+    # counts: rows=blocks, cols=classes
+    counts = pd.crosstab(key, y_cat, dropna=False)
 
-    # Ensure columns are exactly classes
+    # Ensure all classes are columns (in case a class is missing in train split)
     for cl in classes:
         if cl not in counts.columns:
             counts[cl] = 0
@@ -54,25 +41,18 @@ def build_block_probas(
 
 def predict_proba_from_blocks(
     X: pd.DataFrame,
-    cols: List[str],
+    cols: list[str],
     block_probas: pd.DataFrame,
     global_proba: pd.Series,
 ) -> pd.DataFrame:
     """
-    Row-wise lookup of block probabilities. Unseen blocks -> global prior.
+    Lookup block probabilities using hashed keys; unseen blocks fall back to global prior.
     """
     classes = global_proba.index
+    key = make_block_key(X, cols)
 
-    if not cols:
-        return pd.DataFrame(
-            np.tile(global_proba.to_numpy(), (len(X), 1)),
-            index=X.index,
-            columns=classes,
-        )
-
-    keys = pd.MultiIndex.from_frame(X[cols], names=cols)
-    mapped = block_probas.reindex(keys)     # missing => NaN rows
-    mapped = mapped.fillna(global_proba)    # fallback
+    mapped = block_probas.reindex(key.values)   # index of block_probas is block key
+    mapped = mapped.fillna(global_proba)
     mapped.index = X.index
     mapped.columns = classes
     return mapped
@@ -96,11 +76,11 @@ def evaluate_subset(
 
     if cols:
         if omega_on == "train":
-            gsz = X_train.groupby(cols, sort=False, dropna=False).size().to_numpy()
+            key_for_omega = make_block_key(X_train, cols)
         else:
-            gsz = X_val.groupby(cols, sort=False, dropna=False).size().to_numpy()
-    else:
-        gsz = np.array([len(X_train) if omega_on == "train" else len(X_val)], dtype=int)
+            key_for_omega = make_block_key(X_val, cols)
+
+        gsz = key_for_omega.value_counts().to_numpy()
 
     omega = omega_from_group_sizes(gsz)
     J = float(val_loss + lambda_ * omega)
@@ -200,3 +180,18 @@ def greedy_backward_elimination(
 
     final_eval = cur
     return S, dropped, history, final_eval
+
+def make_block_key(X: pd.DataFrame, cols: list[str]) -> pd.Series:
+    """
+    Stable-ish block id for each row based on equality of values in `cols`.
+    Requires that X has already been 'safe-filled' (no NaN != NaN surprises).
+    """
+    if not cols:
+        return pd.Series(np.zeros(len(X), dtype="uint64"), index=X.index, name="__block__")
+
+    # Hash the selected columns row-wise
+    # index=False: ignore original index in the hash
+    key = pd.util.hash_pandas_object(X[cols], index=False).astype("uint64")
+    key.name = "__block__"
+    key.index = X.index
+    return key
