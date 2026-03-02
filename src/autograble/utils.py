@@ -21,17 +21,31 @@ def safe_fill_for_grouping(df: pd.DataFrame) -> pd.DataFrame:
     """
     Make equality/grouping deterministic:
     - Replace missing values with stable sentinels.
-    - Avoid NaN != NaN behavior causing accidental singletonization.
+    - Handle pandas Categoricals explicitly.
     """
     out = df.copy()
+
     for c in out.columns:
         s = out[c]
-        if np.issubdtype(s.dtype, np.datetime64):
-            out[c] = s.fillna(pd.Timestamp.min)
-        elif s.dtype.kind in ("f", "i", "u", "b"):
-            out[c] = s.fillna(-10**18)
-        else:
+
+        # --- IMPORTANT: handle categoricals first ---
+        if pd.api.types.is_categorical_dtype(s):
             out[c] = s.astype("object").where(s.notna(), "__MISSING__")
+            continue
+
+        # datetime
+        if pd.api.types.is_datetime64_any_dtype(s):
+            out[c] = s.fillna(pd.Timestamp.min)
+            continue
+
+        # numeric / boolean
+        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_bool_dtype(s):
+            out[c] = s.fillna(-10**18)
+            continue
+
+        # fallback: object / string
+        out[c] = s.astype("object").where(s.notna(), "__MISSING__")
+
     return out
 
 
