@@ -21,6 +21,7 @@ class Stage1Config:
     max_steps: Optional[int] = None
 
     omega_on: str = "train"      # "train" (recommended) or "val"
+    cardinality_encoding: bool = False
 
 
 @dataclass
@@ -35,3 +36,7 @@ class Stage1Result:
     global_proba: pd.Series     # class priors on train
 
     config: Dict[str, Any]
+
+    # cardinality encoding maps: col -> value_counts Series (value -> count in original df)
+    # None when cardinality_encoding=False
+    cardinality_maps: Optional[Dict[str, pd.Series]] = None

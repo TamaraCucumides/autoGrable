@@ -5,7 +5,7 @@ import pandas as pd
 
 from .types import Stage1Config, Stage1Result
 from .candidates import select_candidate_columns
-from .utils import train_val_split, safe_fill_for_grouping
+from .utils import train_val_split, safe_fill_for_grouping, cardinality_encode
 from .stage1_core import greedy_backward_elimination, build_block_probas
 
 
@@ -28,6 +28,11 @@ def fit_structure_stage1(df: pd.DataFrame, config: Stage1Config) -> Stage1Result
         force_include=config.force_include,
         force_exclude=config.force_exclude,
     )
+
+    # Preprocessing: replace candidate column values with their frequency count in df
+    cardinality_maps = None
+    if config.cardinality_encoding:
+        df, cardinality_maps = cardinality_encode(df, eligible_cols)
 
     n = len(df)
     if n < 2:
@@ -79,5 +84,7 @@ def fit_structure_stage1(df: pd.DataFrame, config: Stage1Config) -> Stage1Result
             "min_improvement": config.min_improvement,
             "max_steps": config.max_steps,
             "omega_on": config.omega_on,
+            "cardinality_encoding": config.cardinality_encoding,
         },
+        cardinality_maps=cardinality_maps,
     )

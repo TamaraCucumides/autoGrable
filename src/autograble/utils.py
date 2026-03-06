@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
@@ -47,6 +47,27 @@ def safe_fill_for_grouping(df: pd.DataFrame) -> pd.DataFrame:
         out[c] = s.astype("object").where(s.notna(), "__MISSING__")
 
     return out
+
+
+def cardinality_encode(
+    df: pd.DataFrame, cols: List[str]
+) -> Tuple[pd.DataFrame, Dict[str, pd.Series]]:
+    """
+    Replace each value in cols with its frequency count in df.
+
+    For example, if 'City' has ['Paris', 'Paris', 'Lyon'], it becomes [2, 2, 1].
+    NaN values are counted as their own group.
+
+    Returns:
+      df_encoded: copy of df with cols replaced by integer counts
+      maps: dict of col -> value_counts Series (for applying to new data later)
+    """
+    df = df.copy()
+    maps: Dict[str, pd.Series] = {}
+    for col in cols:
+        maps[col] = df[col].value_counts(dropna=False)
+        df[col] = df.groupby(col, dropna=False)[col].transform("size").astype(int)
+    return df, maps
 
 
 def omega_from_group_sizes(group_sizes: np.ndarray) -> float:
