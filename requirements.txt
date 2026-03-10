@@ -1,0 +1,11 @@
+# Core dependencies (CPU torch)
+# For GPU, install torch manually before running pip install:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+pandas>=1.5
+numpy>=1.23
+torch>=2.0
+torch_geometric>=2.4
+
+# Dev extras
+pytest>=7.0
+ruff>=0.1.0
