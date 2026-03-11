@@ -40,3 +40,14 @@ class Stage1Result:
     # cardinality encoding maps: col -> value_counts Series (value -> count in original df)
     # None when cardinality_encoding=False
     cardinality_maps: Optional[Dict[str, pd.Series]] = None
+
+
+@dataclass(frozen=True)
+class Stage2Config:
+    hidden_dim: int = 64
+    num_layers: int = 3           # GRU unroll steps
+    dropout: float = 0.0
+    lr: float = 1e-3
+    epochs: int = 200
+    task: str = "classification"  # "classification" or "regression"
+    device: str = "cpu"
