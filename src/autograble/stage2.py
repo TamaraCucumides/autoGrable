@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 import pandas as pd
 import torch
@@ -9,123 +9,28 @@ import torch.nn as nn
 from torch_geometric.data import HeteroData
 
 from .types import Stage2Config
+from .models.base import BaseHeteroModel
+from .models.gated_gnn import HeteroGatedGNN
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Result
 # ---------------------------------------------------------------------------
 
-def _key(col: str) -> str:
-    """Sanitize column names for use as ModuleDict / ParameterDict keys."""
-    return col.replace(".", "__dot__")
-
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
-class HeteroGatedGNN(nn.Module):
-    """
-    Bipartite Gated GNN over a HeteroData graph from build_hetero_graph().
-
-    Node types:
-      "row"  — one learnable embedding per row
-      <col>  — one learnable embedding per unique value in that column
-
-    At each of num_layers steps:
-      1. Gated messages flow row → value and value → row for every column.
-      2. Each column has an independent learnable scalar gate (sigmoid-activated).
-         Gates close to 0 mean that column contributes little structurally.
-      3. Node states are updated with a GRU cell.
-
-    Output: logits (classification) or scalars (regression) for every row node.
-    """
-
-    def __init__(
-        self,
-        cols: List[str],
-        col_sizes: Dict[str, int],
-        num_rows: int,
-        num_out: int,
-        config: Stage2Config,
-        tab_dim: int = 0,
-    ):
-        super().__init__()
-        H = config.hidden_dim
-        self._cols = cols
-
-        # Node embeddings (no input features needed)
-        self.row_emb = nn.Embedding(num_rows, H)
-        self.val_embs = nn.ModuleDict({
-            _key(c): nn.Embedding(col_sizes[c], H) for c in cols
-        })
-
-        # Per-column scalar gates; init=0 → sigmoid(0)=0.5 at the start
-        self.gates = nn.ParameterDict({
-            _key(c): nn.Parameter(torch.zeros(1)) for c in cols
-        })
-
-        # Message linear layers (no bias to keep messages purely structural)
-        self.msg_r2v = nn.ModuleDict({
-            _key(c): nn.Linear(H, H, bias=False) for c in cols
-        })
-        self.msg_v2r = nn.ModuleDict({
-            _key(c): nn.Linear(H, H, bias=False) for c in cols
-        })
-
-        # GRU cells for node state updates
-        self.row_gru = nn.GRUCell(H, H)
-        self.val_grus = nn.ModuleDict({
-            _key(c): nn.GRUCell(H, H) for c in cols
-        })
-
-        self.dropout = nn.Dropout(config.dropout)
-        self.head = nn.Linear(H + tab_dim, num_out)
-        self.num_layers = config.num_layers
-
-    def forward(self, data: HeteroData, x_tab: Optional[torch.Tensor] = None) -> torch.Tensor:
-        dev = next(self.parameters()).device
-
-        h_row = self.row_emb(torch.arange(data["row"].num_nodes, device=dev))
-        h_val = {
-            c: self.val_embs[_key(c)](torch.arange(data[c].num_nodes, device=dev))
-            for c in self._cols
-        }
-
-        for _ in range(self.num_layers):
-            row_agg = torch.zeros_like(h_row)
-            val_agg = {c: torch.zeros_like(h_val[c]) for c in self._cols}
-
-            for c in self._cols:
-                gate = torch.sigmoid(self.gates[_key(c)])  # scalar in (0, 1)
-                ei = data["row", "has", c].edge_index.to(dev)
-                src, dst = ei[0], ei[1]  # src=row node, dst=value node
-
-                # Row → Value
-                m = self.msg_r2v[_key(c)](h_row[src]) * gate
-                val_agg[c].scatter_add_(0, dst.unsqueeze(1).expand_as(m), m)
-
-                # Value → Row
-                m = self.msg_v2r[_key(c)](h_val[c][dst]) * gate
-                row_agg.scatter_add_(0, src.unsqueeze(1).expand_as(m), m)
-
-            h_row = self.row_gru(self.dropout(row_agg), h_row)
-            for c in self._cols:
-                h_val[c] = self.val_grus[_key(c)](self.dropout(val_agg[c]), h_val[c])
-
-        h = torch.cat([h_row, x_tab], dim=1) if x_tab is not None else h_row
-        return self.head(self.dropout(h))  # [num_rows, num_out]
-
-    def gate_values(self) -> Dict[str, float]:
-        """Return sigmoid(gate) for each column — closer to 1 means more relevant."""
-        return {c: float(torch.sigmoid(self.gates[_key(c)]).item()) for c in self._cols}
+@dataclass
+class Stage2Result:
+    model: BaseHeteroModel
+    edge_gates: Dict[str, float]    # col -> gate value in (0, 1); {} if model has no gates
+    train_losses: List[float]
+    val_losses: Optional[List[float]]
+    config: Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
 # Gate inspection
 # ---------------------------------------------------------------------------
 
-def gate_summary(result: "Stage2Result", threshold: float = 0.2) -> pd.DataFrame:
+def gate_summary(result: Stage2Result, threshold: float = 0.2) -> pd.DataFrame:
     """
     Return a DataFrame summarising each column's learned gate value, sorted
     from most ignored (gate → 0) to most active (gate → 1).
@@ -138,9 +43,12 @@ def gate_summary(result: "Stage2Result", threshold: float = 0.2) -> pd.DataFrame
                  "active"   if gate >= 0.5
 
     Args:
-        result:    Stage2Result from fit_gated_gnn()
+        result:    Stage2Result from fit_stage2() or fit_gated_gnn()
         threshold: gate value below which a column is labelled "ignored" (default 0.2)
     """
+    if not result.edge_gates:
+        raise ValueError("This model does not expose gate values.")
+
     def _status(g: float) -> str:
         if g < threshold:
             return "ignored"
@@ -160,41 +68,31 @@ def gate_summary(result: "Stage2Result", threshold: float = 0.2) -> pd.DataFrame
 
 
 # ---------------------------------------------------------------------------
-# Result
-# ---------------------------------------------------------------------------
-
-@dataclass
-class Stage2Result:
-    model: HeteroGatedGNN
-    edge_gates: Dict[str, float]    # col -> gate value in (0, 1) after training
-    train_losses: List[float]
-    val_losses: Optional[List[float]]
-    config: Dict[str, Any]
-
-
-# ---------------------------------------------------------------------------
 # Fitting
 # ---------------------------------------------------------------------------
 
-def fit_gated_gnn(
+def fit_stage2(
     graph: HeteroData,
     y: torch.Tensor,
     config: Stage2Config,
+    model_cls: Type[BaseHeteroModel] = HeteroGatedGNN,
     x_tab: Optional[torch.Tensor] = None,
     train_mask: Optional[torch.Tensor] = None,
     val_mask: Optional[torch.Tensor] = None,
 ) -> Stage2Result:
     """
-    Train a HeteroGatedGNN on the given graph.
+    Build and train any BaseHeteroModel on the given graph.
 
     Args:
         graph:      HeteroData from build_hetero_graph()
         y:          Labels for row nodes. Long tensor for classification,
                     float tensor for regression.
         config:     Stage2Config
+        model_cls:  Model class to instantiate (default: HeteroGatedGNN).
+                    Must follow the BaseHeteroModel constructor signature:
+                    (cols, col_sizes, num_rows, num_out, config, tab_dim).
         x_tab:      Optional raw tabular features [num_rows, D]. Concatenated
-                    with the GNN's structural embedding before the output head,
-                    so the GNN is free to focus purely on graph structure.
+                    with the GNN embedding before the output head.
         train_mask: Boolean mask over row nodes for training (default: all rows)
         val_mask:   Boolean mask over row nodes for validation (optional)
     """
@@ -219,7 +117,7 @@ def fit_gated_gnn(
         num_out = 1
         loss_fn = nn.MSELoss()
 
-    model = HeteroGatedGNN(
+    model = model_cls(
         cols=cols,
         col_sizes=col_sizes,
         num_rows=n,
@@ -259,6 +157,7 @@ def fit_gated_gnn(
         train_losses=train_losses,
         val_losses=val_losses if val_mask is not None else None,
         config={
+            "model": model_cls.__name__,
             "hidden_dim": config.hidden_dim,
             "num_layers": config.num_layers,
             "dropout": config.dropout,
@@ -267,4 +166,22 @@ def fit_gated_gnn(
             "task": config.task,
             "device": config.device,
         },
+    )
+
+
+def fit_gated_gnn(
+    graph: HeteroData,
+    y: torch.Tensor,
+    config: Stage2Config,
+    x_tab: Optional[torch.Tensor] = None,
+    train_mask: Optional[torch.Tensor] = None,
+    val_mask: Optional[torch.Tensor] = None,
+) -> Stage2Result:
+    """Convenience wrapper for fit_stage2 with model_cls=HeteroGatedGNN."""
+    return fit_stage2(
+        graph, y, config,
+        model_cls=HeteroGatedGNN,
+        x_tab=x_tab,
+        train_mask=train_mask,
+        val_mask=val_mask,
     )

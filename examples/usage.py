@@ -14,10 +14,12 @@ from sklearn.preprocessing import LabelEncoder  # only needed to encode y
 from autograble import (
     Stage1Config, fit_structure_stage1,
     build_hetero_graph,
-    Stage2Config, fit_gated_gnn,
+    Stage2Config, fit_stage2,
     make_tabular_features,
     gate_summary,
+    MODELS,
 )
+from autograble.models import HeteroGatedGNN   # import directly for type hints / custom use
 
 # ---------------------------------------------------------------------------
 # 0. Load your data
@@ -67,7 +69,7 @@ le = LabelEncoder()
 y = torch.tensor(le.fit_transform(df[TARGET]), dtype=torch.long)
 
 # 3b. Raw tabular features for the prediction head.
-#     Exclude the target and the structural columns that are already in the graph.
+#     Exclude the target and the structural columns already represented in the graph.
 x_tab = make_tabular_features(
     df,
     exclude_cols=[TARGET] + result.selected_cols,
@@ -83,12 +85,10 @@ train_mask[perm[:int(0.8 * n)]] = True
 val_mask[perm[int(0.8 * n):]]   = True
 
 # ---------------------------------------------------------------------------
-# 4. Stage 2 — Gated GNN
+# 4. Stage 2 — fit a model
 # ---------------------------------------------------------------------------
-# The GNN propagates over the bipartite graph and learns a scalar gate per
-# column edge type.  Gates close to 0 mean the model ignores that structure.
-# The head combines the GNN embedding with x_tab, keeping the GNN focused
-# purely on structural signals.
+# fit_stage2 is the generic entry point: pass any model class from autograble.models.
+# fit_gated_gnn is a convenience wrapper that uses HeteroGatedGNN by default.
 
 s2_config = Stage2Config(
     hidden_dim=64,
@@ -100,14 +100,18 @@ s2_config = Stage2Config(
     device="cuda" if torch.cuda.is_available() else "cpu",
 )
 
-s2 = fit_gated_gnn(
-    graph,
-    y,
+# Option A — explicit model class
+s2 = fit_stage2(
+    graph, y,
     config=s2_config,
+    model_cls=HeteroGatedGNN,   # swap this for any other model in MODELS
     x_tab=x_tab,
     train_mask=train_mask,
     val_mask=val_mask,
 )
+
+# Option B — pick model by name from the registry
+# s2 = fit_stage2(graph, y, config=s2_config, model_cls=MODELS["gated_gnn"], x_tab=x_tab)
 
 # ---------------------------------------------------------------------------
 # 5. Inspect which structural columns the GNN found useful
