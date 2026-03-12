@@ -70,6 +70,26 @@ def cardinality_encode(
     return df, maps
 
 
+def apply_cardinality_encode(
+    df: pd.DataFrame, cols: List[str], maps: Dict[str, pd.Series]
+) -> pd.DataFrame:
+    """
+    Apply pre-computed cardinality maps (from cardinality_encode) to a new df.
+
+    Values not seen in the training maps are assigned count 0.
+    """
+    df = df.copy()
+    for col in cols:
+        counts = maps[col]  # value -> count Series from train
+        nan_count = int(counts.get(float("nan"), counts.get(None, 0)))
+        def _map(v):
+            if pd.isna(v):
+                return nan_count
+            return int(counts.get(v, 0))
+        df[col] = df[col].map(_map).astype(int)
+    return df
+
+
 def omega_from_group_sizes(group_sizes: np.ndarray) -> float:
     n = float(group_sizes.sum())
     if n <= 0:

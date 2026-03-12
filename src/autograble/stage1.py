@@ -5,17 +5,29 @@ import pandas as pd
 
 from .types import Stage1Config, Stage1Result
 from .candidates import select_candidate_columns
-from .utils import train_val_split, safe_fill_for_grouping, cardinality_encode
+from .utils import train_val_split, safe_fill_for_grouping, cardinality_encode, apply_cardinality_encode
 from .stage1_core import greedy_backward_elimination, build_block_probas
 
 
-def fit_structure_stage1(df: pd.DataFrame, config: Stage1Config) -> Stage1Result:
+def fit_structure_stage1(
+    df: pd.DataFrame,
+    config: Stage1Config,
+    df_val: Optional[pd.DataFrame] = None,
+) -> Stage1Result:
     """
     Stage 1 (classification): greedy backward elimination over structural columns.
 
     - Induces a partition via equality on selected columns S
     - Learns block-conditional class probabilities on TRAIN
     - Minimizes J(S) = val_loss + lambda * Omega(sample, pi)
+
+    Args:
+        df:     Training DataFrame (always required).
+        config: Stage1Config.
+        df_val: Optional external validation DataFrame. When provided, the
+                internal train/val split (config.val_frac) is skipped and
+                df_val is used directly for lambda selection. Cardinality
+                maps are computed from df (train) and applied to df_val.
     """
     y_col = config.y_col
     if y_col not in df.columns:
@@ -29,25 +41,31 @@ def fit_structure_stage1(df: pd.DataFrame, config: Stage1Config) -> Stage1Result
         force_exclude=config.force_exclude,
     )
 
-    # Preprocessing: replace candidate column values with their frequency count in df
+    # Cardinality encoding: computed on train, optionally applied to df_val
     cardinality_maps = None
     if config.cardinality_encoding:
         df, cardinality_maps = cardinality_encode(df, eligible_cols)
+        if df_val is not None:
+            df_val = apply_cardinality_encode(df_val, eligible_cols, cardinality_maps)
 
     n = len(df)
     if n < 2:
         raise ValueError("Need at least 2 rows to run Stage 1.")
 
-    train_idx, val_idx = train_val_split(n, config.val_frac, config.random_state)
-    df_train = df.iloc[train_idx].copy()
-    df_val = df.iloc[val_idx].copy()
+    if df_val is not None:
+        df_train = df
+        df_val_split = df_val
+    else:
+        train_idx, val_idx = train_val_split(n, config.val_frac, config.random_state)
+        df_train = df.iloc[train_idx].copy()
+        df_val_split = df.iloc[val_idx].copy()
 
     y_train = df_train[y_col].copy()
-    y_val = df_val[y_col].copy()
+    y_val = df_val_split[y_col].copy()
 
     # grouping-safe views for eligible cols only
     X_train = safe_fill_for_grouping(df_train[eligible_cols])
-    X_val = safe_fill_for_grouping(df_val[eligible_cols])
+    X_val = safe_fill_for_grouping(df_val_split[eligible_cols])
 
     selected_cols, dropped_cols, history, _final_eval = greedy_backward_elimination(
         X_train=X_train,

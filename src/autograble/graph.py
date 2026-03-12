@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 import pandas as pd
 import torch
 from torch_geometric.data import HeteroData
@@ -7,7 +9,11 @@ from torch_geometric.data import HeteroData
 from .types import Stage1Result
 
 
-def build_hetero_graph(df: pd.DataFrame, result: Stage1Result) -> HeteroData:
+def build_hetero_graph(
+    df: pd.DataFrame,
+    result: Stage1Result,
+    x_tab: Optional[torch.Tensor] = None,
+) -> HeteroData:
     """
     Build a bipartite HeteroData graph from the columns selected by Stage 1.
 
@@ -22,9 +28,19 @@ def build_hetero_graph(df: pd.DataFrame, result: Stage1Result) -> HeteroData:
     Value-node identifier:
       data[col].values — list of the original values (str representations), in node-index order
       NaN is represented as the string "__NaN__"
+
+    Args:
+        df:    DataFrame for this split.
+        result: Stage1Result (used for selected_cols).
+        x_tab: Optional tabular feature tensor [n_rows, D]. When provided it is
+               stored as data["row"].x and used for row-node initialisation in
+               the GNN. When None, the GNN falls back to a learnable prototype.
     """
     data = HeteroData()
     data["row"].num_nodes = len(df)
+
+    if x_tab is not None:
+        data["row"].x = x_tab  # [n_rows, D]
 
     for col in result.selected_cols:
         series = df[col]

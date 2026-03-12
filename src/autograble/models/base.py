@@ -20,7 +20,7 @@ class BaseHeteroModel(nn.Module, ABC):
     Interface all Stage-2 models must satisfy.
 
     Constructor signature (enforced by fit_stage2):
-        __init__(cols, col_sizes, num_rows, num_out, config, tab_dim)
+        __init__(cols, col_sizes, num_rows, num_out, config, tab_dim, row_feat_dim)
 
     Subclasses must implement forward() and may override gate_values().
     """

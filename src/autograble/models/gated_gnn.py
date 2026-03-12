@@ -12,11 +12,17 @@ from .base import BaseHeteroModel, _key
 
 class HeteroGatedGNN(BaseHeteroModel):
     """
-    Bipartite Gated GNN over a HeteroData graph from build_hetero_graph().
+    Inductive bipartite Gated GNN over a HeteroData graph from build_hetero_graph().
 
-    Node types:
-      "row"  — one learnable embedding per row
-      <col>  — one learnable embedding per unique value in that column
+    Row-node initialisation (inductive):
+      - If data["row"].x is present (tabular features stored by build_hetero_graph),
+        they are projected via row_proj: Linear(row_feat_dim → H).
+      - Otherwise all rows share one learnable prototype vector (row_proto).
+
+    Value-node initialisation (inductive):
+      - Each column has one learnable prototype vector (val_protos).
+        All value nodes in the same column start with the same representation;
+        message passing differentiates them based on their structural neighbourhood.
 
     At each of num_layers steps:
       1. Gated messages flow row → value and value → row for every column.
@@ -25,25 +31,38 @@ class HeteroGatedGNN(BaseHeteroModel):
       3. Node states are updated with a GRU cell.
 
     Output: logits (classification) or scalars (regression) for every row node.
+
+    Args:
+        row_feat_dim: Dimension of row node features stored in data["row"].x.
+                      0 means no row features → learnable prototype is used instead.
+        tab_dim:      Dimension of separately-passed x_tab concatenated at the head.
+                      0 means no head-level tabular features.
     """
 
     def __init__(
         self,
         cols: List[str],
-        col_sizes: Dict[str, int],
-        num_rows: int,
+        col_sizes: Dict[str, int],  # kept for API consistency, not used
+        num_rows: int,              # kept for API consistency, not used
         num_out: int,
         config: Stage2Config,
         tab_dim: int = 0,
+        row_feat_dim: int = 0,
     ):
         super().__init__()
         H = config.hidden_dim
         self._cols = cols
+        self._row_feat_dim = row_feat_dim
 
-        # Node embeddings (no input features needed)
-        self.row_emb = nn.Embedding(num_rows, H)
-        self.val_embs = nn.ModuleDict({
-            _key(c): nn.Embedding(col_sizes[c], H) for c in cols
+        # Row initialisation: project tabular features if available, else prototype
+        if row_feat_dim > 0:
+            self.row_proj = nn.Linear(row_feat_dim, H)
+        else:
+            self.row_proto = nn.Parameter(torch.zeros(1, H))
+
+        # Value-node prototypes: one learnable H-dim vector per column
+        self.val_protos = nn.ParameterDict({
+            _key(c): nn.Parameter(torch.zeros(H)) for c in cols
         })
 
         # Per-column scalar gates; init=0 → sigmoid(0)=0.5 at the start
@@ -75,10 +94,18 @@ class HeteroGatedGNN(BaseHeteroModel):
         x_tab: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         dev = next(self.parameters()).device
+        n_rows = data["row"].num_nodes
 
-        h_row = self.row_emb(torch.arange(data["row"].num_nodes, device=dev))
+        # Row nodes: use tabular features from graph if present, else broadcast prototype
+        row_x = data["row"].get("x")
+        if self._row_feat_dim > 0 and row_x is not None:
+            h_row = self.row_proj(row_x.to(dev))
+        else:
+            h_row = self.row_proto.expand(n_rows, -1).clone()
+
+        # Value nodes: broadcast per-column learnable prototype to all value nodes
         h_val = {
-            c: self.val_embs[_key(c)](torch.arange(data[c].num_nodes, device=dev))
+            c: self.val_protos[_key(c)].unsqueeze(0).expand(data[c].num_nodes, -1).clone()
             for c in self._cols
         }
 

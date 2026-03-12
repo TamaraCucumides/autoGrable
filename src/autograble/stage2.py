@@ -72,61 +72,70 @@ def gate_summary(result: Stage2Result, threshold: float = 0.2) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def fit_stage2(
-    graph: HeteroData,
-    y: torch.Tensor,
+    graph_train: HeteroData,
+    y_train: torch.Tensor,
     config: Stage2Config,
     model_cls: Type[BaseHeteroModel] = HeteroGatedGNN,
-    x_tab: Optional[torch.Tensor] = None,
-    train_mask: Optional[torch.Tensor] = None,
-    val_mask: Optional[torch.Tensor] = None,
+    x_tab_train: Optional[torch.Tensor] = None,
+    graph_val: Optional[HeteroData] = None,
+    y_val: Optional[torch.Tensor] = None,
+    x_tab_val: Optional[torch.Tensor] = None,
 ) -> Stage2Result:
     """
-    Build and train any BaseHeteroModel on the given graph.
+    Build and train any BaseHeteroModel in an inductive fashion.
+
+    Each split is a separate graph — no masks. The model generalises to
+    val/test graphs because it uses feature-based (not ID-based) node
+    initialisation (see HeteroGatedGNN).
 
     Args:
-        graph:      HeteroData from build_hetero_graph()
-        y:          Labels for row nodes. Long tensor for classification,
-                    float tensor for regression.
-        config:     Stage2Config
-        model_cls:  Model class to instantiate (default: HeteroGatedGNN).
-                    Must follow the BaseHeteroModel constructor signature:
-                    (cols, col_sizes, num_rows, num_out, config, tab_dim).
-        x_tab:      Optional raw tabular features [num_rows, D]. Concatenated
-                    with the GNN embedding before the output head.
-        train_mask: Boolean mask over row nodes for training (default: all rows)
-        val_mask:   Boolean mask over row nodes for validation (optional)
+        graph_train:   HeteroData for the training split.
+        y_train:       Labels for all row nodes in graph_train.
+                       Long tensor for classification, float for regression.
+        config:        Stage2Config.
+        model_cls:     Model class to instantiate (default: HeteroGatedGNN).
+        x_tab_train:   Optional tabular features [n_train, D] for the head.
+        graph_val:     Optional HeteroData for the validation split.
+        y_val:         Labels for all row nodes in graph_val.
+        x_tab_val:     Optional tabular features [n_val, D] for the head.
     """
     dev = torch.device(config.device)
-    n = graph["row"].num_nodes
 
-    if train_mask is None:
-        train_mask = torch.ones(n, dtype=torch.bool)
+    y_train = y_train.to(dev)
+    x_tab_train = x_tab_train.to(dev) if x_tab_train is not None else None
 
-    y = y.to(dev)
-    train_mask = train_mask.to(dev)
-    val_mask = val_mask.to(dev) if val_mask is not None else None
-    x_tab = x_tab.to(dev) if x_tab is not None else None
+    if graph_val is not None:
+        assert y_val is not None, "y_val required when graph_val is provided"
+        y_val = y_val.to(dev)
+        x_tab_val = x_tab_val.to(dev) if x_tab_val is not None else None
 
-    cols = [t for t in graph.node_types if t != "row"]
-    col_sizes = {c: graph[c].num_nodes for c in cols}
+    cols = [t for t in graph_train.node_types if t != "row"]
+    col_sizes = {c: graph_train[c].num_nodes for c in cols}
 
     if config.task == "classification":
-        num_out = int(y.max().item()) + 1
+        num_out = int(y_train.max().item()) + 1
         loss_fn: nn.Module = nn.CrossEntropyLoss()
     else:
         num_out = 1
         loss_fn = nn.MSELoss()
 
+    row_x = graph_train["row"].get("x")
+    row_feat_dim = row_x.shape[1] if row_x is not None else 0
+
     model = model_cls(
         cols=cols,
         col_sizes=col_sizes,
-        num_rows=n,
+        num_rows=graph_train["row"].num_nodes,
         num_out=num_out,
         config=config,
-        tab_dim=x_tab.shape[1] if x_tab is not None else 0,
+        tab_dim=x_tab_train.shape[1] if x_tab_train is not None else 0,
+        row_feat_dim=row_feat_dim,
     ).to(dev)
 
-    graph = graph.to(dev)
+    graph_train = graph_train.to(dev)
+    if graph_val is not None:
+        graph_val = graph_val.to(dev)
+
     opt = torch.optim.Adam(model.parameters(), lr=config.lr)
 
     train_losses: List[float] = []
@@ -135,27 +144,25 @@ def fit_stage2(
     for _ in range(config.epochs):
         model.train()
         opt.zero_grad()
-        out = model(graph, x_tab)
-        target = y[train_mask]
-        pred = out[train_mask] if config.task == "classification" else out[train_mask].squeeze()
-        loss = loss_fn(pred, target)
+        out = model(graph_train, x_tab_train)
+        pred = out if config.task == "classification" else out.squeeze()
+        loss = loss_fn(pred, y_train)
         loss.backward()
         opt.step()
         train_losses.append(float(loss.item()))
 
-        if val_mask is not None:
+        if graph_val is not None:
             model.eval()
             with torch.no_grad():
-                out = model(graph, x_tab)
-                target = y[val_mask]
-                pred = out[val_mask] if config.task == "classification" else out[val_mask].squeeze()
-                val_losses.append(float(loss_fn(pred, target).item()))
+                out_val = model(graph_val, x_tab_val)
+                pred_val = out_val if config.task == "classification" else out_val.squeeze()
+                val_losses.append(float(loss_fn(pred_val, y_val).item()))
 
     return Stage2Result(
         model=model,
         edge_gates=model.gate_values(),
         train_losses=train_losses,
-        val_losses=val_losses if val_mask is not None else None,
+        val_losses=val_losses if graph_val is not None else None,
         config={
             "model": model_cls.__name__,
             "hidden_dim": config.hidden_dim,
@@ -170,18 +177,20 @@ def fit_stage2(
 
 
 def fit_gated_gnn(
-    graph: HeteroData,
-    y: torch.Tensor,
+    graph_train: HeteroData,
+    y_train: torch.Tensor,
     config: Stage2Config,
-    x_tab: Optional[torch.Tensor] = None,
-    train_mask: Optional[torch.Tensor] = None,
-    val_mask: Optional[torch.Tensor] = None,
+    x_tab_train: Optional[torch.Tensor] = None,
+    graph_val: Optional[HeteroData] = None,
+    y_val: Optional[torch.Tensor] = None,
+    x_tab_val: Optional[torch.Tensor] = None,
 ) -> Stage2Result:
     """Convenience wrapper for fit_stage2 with model_cls=HeteroGatedGNN."""
     return fit_stage2(
-        graph, y, config,
+        graph_train, y_train, config,
         model_cls=HeteroGatedGNN,
-        x_tab=x_tab,
-        train_mask=train_mask,
-        val_mask=val_mask,
+        x_tab_train=x_tab_train,
+        graph_val=graph_val,
+        y_val=y_val,
+        x_tab_val=x_tab_val,
     )
