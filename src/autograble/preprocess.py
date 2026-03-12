@@ -11,13 +11,16 @@ def make_tabular_features(
     exclude_cols: Optional[List[str]] = None,
     numeric_fill: str = "mean",
     encode_categoricals: bool = True,
+    max_cardinality: int = 50,
 ) -> torch.Tensor:
     """
-    Preprocess a DataFrame into a float tensor for use as x_tab in fit_gated_gnn().
+    Preprocess a DataFrame into a float tensor for use as row node features.
 
     Processing per column type:
       - Numeric / boolean : NaN filled with column mean (or 0), kept as-is.
-      - Categorical / object: one-hot encoded (if encode_categoricals=True),
+      - Categorical / object: one-hot encoded (if encode_categoricals=True)
+                               only when unique values <= max_cardinality.
+                               High-cardinality and text columns are skipped.
                                NaN becomes its own "__NaN__" category.
       - Everything else (datetime, etc.): skipped.
 
@@ -28,6 +31,9 @@ def make_tabular_features(
                               (those are already represented in the graph).
         numeric_fill:         NaN strategy for numeric columns: "mean" or "zero".
         encode_categoricals:  One-hot encode object / categorical columns.
+        max_cardinality:      Skip one-hot encoding for columns with more unique
+                              values than this threshold (default 50). Prevents
+                              OOM from high-cardinality or free-text columns.
 
     Returns:
         Float tensor of shape [num_rows, num_features].
@@ -53,11 +59,13 @@ def make_tabular_features(
             parts.append(s.fillna(fill).to_frame())
             continue
 
-        # Categorical / object → one-hot
+        # Categorical / object → one-hot (only if low cardinality)
         if encode_categoricals and (
             pd.api.types.is_object_dtype(s)
             or pd.api.types.is_categorical_dtype(s)
         ):
+            if s.nunique(dropna=False) > max_cardinality:
+                continue  # skip high-cardinality / text columns
             s = s.astype(str).where(s.notna(), "__NaN__")
             dummies = pd.get_dummies(s, prefix=col, dtype=float)
             parts.append(dummies)
