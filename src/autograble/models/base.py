@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from ..types import Stage2Config
+from ..types import RefinementConfig
 
 
 def _key(col: str) -> str:
@@ -17,9 +17,9 @@ def _key(col: str) -> str:
 
 class BaseHeteroModel(nn.Module, ABC):
     """
-    Interface all Stage-2 models must satisfy.
+    Interface all refinement models must satisfy.
 
-    Constructor signature (enforced by fit_stage2):
+    Constructor signature (enforced by fit_refinement):
         __init__(cols, col_sizes, num_rows, num_out, config, tab_dim, row_feat_dim)
 
     Subclasses must implement forward() and may override gate_values().

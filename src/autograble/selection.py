@@ -74,13 +74,12 @@ def evaluate_subset(
     proba_val = predict_proba_from_blocks(X_val, cols, block_probas, global_proba)
     val_loss = loss_from_proba(y_val, proba_val, loss_name=loss_name)
 
-    if cols:
-        if omega_on == "train":
-            key_for_omega = make_block_key(X_train, cols)
-        else:
-            key_for_omega = make_block_key(X_val, cols)
+    if omega_on == "train":
+        key_for_omega = make_block_key(X_train, cols)
+    else:
+        key_for_omega = make_block_key(X_val, cols)
 
-        gsz = key_for_omega.value_counts().to_numpy()
+    gsz = key_for_omega.value_counts().to_numpy()
 
     omega = omega_from_group_sizes(gsz)
     J = float(val_loss + lambda_ * omega)
@@ -96,13 +95,14 @@ def evaluate_subset(
     }
 
 
-def greedy_backward_elimination(
+def greedy_selection(
     X_train: pd.DataFrame,
     y_train: pd.Series,
     X_val: pd.DataFrame,
     y_val: pd.Series,
     initial_cols: List[str],
     *,
+    direction: str = "backward",
     lambda_: float,
     loss_name: str,
     omega_on: str = "train",
@@ -110,14 +110,33 @@ def greedy_backward_elimination(
     max_steps: Optional[int] = None,
 ) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Any]]:
     """
+    Greedy structural column selection, minimizing J(S) = val_loss + lambda * Omega(S).
+
+    direction="backward": start with S = all of initial_cols (every column
+        distinguishes a block) and greedily drop the column whose removal
+        improves J the most, stopping when no drop improves J (by more than
+        min_improvement) or when a single column remains.
+
+    direction="forward": start with S = [] (all rows are a single block)
+        and greedily add the column whose inclusion improves J the most,
+        stopping when no addition improves J or every column has been added.
+
     Returns:
-      selected_cols, dropped_cols, history, final_eval
+      selected_cols, unselected_cols, history, final_eval
+
+      unselected_cols is the columns dropped (backward) or never added
+      (forward).
     """
+    if direction not in ("backward", "forward"):
+        raise ValueError("direction must be 'backward' or 'forward'")
     if omega_on not in ("train", "val"):
         raise ValueError("omega_on must be 'train' or 'val'")
 
-    S = list(initial_cols)
-    dropped: List[str] = []
+    backward = direction == "backward"
+
+    S: List[str] = list(initial_cols) if backward else []
+    pool: List[str] = [] if backward else list(initial_cols)
+    unselected: List[str] = []
     history: List[Dict[str, Any]] = []
 
     cur = evaluate_subset(
@@ -138,29 +157,35 @@ def greedy_backward_elimination(
     while True:
         if max_steps is not None and step >= max_steps:
             break
-        if len(S) <= 1:
+
+        candidates = S if backward else pool
+        if backward and len(S) <= 1:
+            break
+        if not backward and not pool:
             break
 
         best: Optional[Dict[str, Any]] = None
-        best_drop: Optional[str] = None
+        best_move: Optional[str] = None
 
-        for c in S:
-            cand_cols = [x for x in S if x != c]
+        for c in candidates:
+            cand_cols = [x for x in S if x != c] if backward else S + [c]
             cand = evaluate_subset(
                 X_train, y_train, X_val, y_val, cand_cols,
                 lambda_=lambda_, loss_name=loss_name, omega_on=omega_on
             )
             if best is None or cand["J"] < best["J"]:
                 best = cand
-                best_drop = c
+                best_move = c
 
-        assert best is not None and best_drop is not None
+        assert best is not None and best_move is not None
         improvement = float(cur["J"] - best["J"])
+        move_key = "dropped" if backward else "added"
+        move_action = "drop" if backward else "add"
 
         history.append({
             "step": step + 1,
-            "action": "drop" if improvement > min_improvement else "stop",
-            "dropped": best_drop,
+            "action": move_action if improvement > min_improvement else "stop",
+            move_key: best_move,
             "improvement": improvement,
             "cols": best["cols"].copy(),
             "J": best["J"],
@@ -173,13 +198,70 @@ def greedy_backward_elimination(
             break
 
         # accept
-        dropped.append(best_drop)
+        if backward:
+            unselected.append(best_move)
+        else:
+            pool = [x for x in pool if x != best_move]
         S = best["cols"]
         cur = best
         step += 1
 
+    if not backward:
+        unselected = [c for c in initial_cols if c not in S]
+
     final_eval = cur
-    return S, dropped, history, final_eval
+    return S, unselected, history, final_eval
+
+
+def greedy_backward_elimination(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    initial_cols: List[str],
+    *,
+    lambda_: float,
+    loss_name: str,
+    omega_on: str = "train",
+    min_improvement: float = 0.0,
+    max_steps: Optional[int] = None,
+) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Returns:
+      selected_cols, dropped_cols, history, final_eval
+    """
+    return greedy_selection(
+        X_train, y_train, X_val, y_val, initial_cols,
+        direction="backward",
+        lambda_=lambda_, loss_name=loss_name, omega_on=omega_on,
+        min_improvement=min_improvement, max_steps=max_steps,
+    )
+
+
+def greedy_forward_selection(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    initial_cols: List[str],
+    *,
+    lambda_: float,
+    loss_name: str,
+    omega_on: str = "train",
+    min_improvement: float = 0.0,
+    max_steps: Optional[int] = None,
+) -> Tuple[List[str], List[str], List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Returns:
+      selected_cols, unselected_cols, history, final_eval
+    """
+    return greedy_selection(
+        X_train, y_train, X_val, y_val, initial_cols,
+        direction="forward",
+        lambda_=lambda_, loss_name=loss_name, omega_on=omega_on,
+        min_improvement=min_improvement, max_steps=max_steps,
+    )
+
 
 def make_block_key(X: pd.DataFrame, cols: list[str]) -> pd.Series:
     """

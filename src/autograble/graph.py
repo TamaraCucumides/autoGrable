@@ -1,21 +1,38 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 import torch
 from torch_geometric.data import HeteroData
 
-from .types import Stage1Result
+from .preprocess import make_tabular_features
+
+
+def _encode_temporal(df: pd.DataFrame, temporal_column: str) -> torch.Tensor:
+    """
+    Convert a datetime column into raw seconds-since-epoch, one value per row.
+    NaT becomes NaN — left for the consumer (loader/model) to handle, not
+    imputed here, since this is metadata rather than a model-ready feature.
+    """
+    t = pd.to_datetime(df[temporal_column])
+    t_seconds = t.view("int64").astype(float) / 1e9  # ns -> s since epoch
+    t_seconds[t.isna()] = float("nan")
+
+    return torch.tensor(t_seconds.values, dtype=torch.float)  # [n_rows]
 
 
 def build_hetero_graph(
     df: pd.DataFrame,
-    result: Stage1Result,
-    x_tab: Optional[torch.Tensor] = None,
+    selected_cols: List[str],
+    other_columns: Optional[List[str]] = None,
+    temporal_column: Optional[str] = None,
+    numeric_fill: str = "mean",
+    encode_categoricals: bool = True,
+    max_cardinality: int = 50,
 ) -> HeteroData:
     """
-    Build a bipartite HeteroData graph from the columns selected by Stage 1.
+    Build a bipartite HeteroData graph over a set of selected columns.
 
     Node types:
       "row"  — one node per row in df
@@ -29,20 +46,44 @@ def build_hetero_graph(
       data[col].values — list of the original values (str representations), in node-index order
       NaN is represented as the string "__NaN__"
 
+    Row-node features (data["row"].x), when produced, come from tabularising
+    other_columns via make_tabular_features (numeric / one-hot).
+
+    Row-node temporal metadata (data["row"].time), when produced, is a
+    [n_rows] tensor of seconds-since-epoch — kept separate from data["row"].x
+    so a downstream loader/model can use it explicitly (e.g. to order or mask
+    rows by time) rather than it being an opaque column buried in the tabular
+    feature block.
+
     Args:
-        df:    DataFrame for this split.
-        result: Stage1Result (used for selected_cols).
-        x_tab: Optional tabular feature tensor [n_rows, D]. When provided it is
-               stored as data["row"].x and used for row-node initialisation in
-               the GNN. When None, the GNN falls back to a learnable prototype.
+        df:              DataFrame for this split.
+        selected_cols:   Columns to encode as value-node types + row<->value edges.
+        other_columns:   Optional columns to tabularise into row-node features
+                          (data["row"].x). When None, no such features are added.
+        temporal_column:  Optional datetime column stored as row-node metadata
+                          (data["row"].time), for the consuming loader/model to
+                          use however it needs to (e.g. to prevent leakage). Not
+                          folded into data["row"].x and not imputed/normalised
+                          here.
+        numeric_fill:        Passed through to make_tabular_features.
+        encode_categoricals:  Passed through to make_tabular_features.
+        max_cardinality:      Passed through to make_tabular_features.
     """
     data = HeteroData()
     data["row"].num_nodes = len(df)
 
-    if x_tab is not None:
-        data["row"].x = x_tab  # [n_rows, D]
+    if other_columns:
+        data["row"].x = make_tabular_features(
+            df[list(other_columns)],
+            numeric_fill=numeric_fill,
+            encode_categoricals=encode_categoricals,
+            max_cardinality=max_cardinality,
+        )  # [n_rows, D]
 
-    for col in result.selected_cols:
+    if temporal_column is not None:
+        data["row"].time = _encode_temporal(df, temporal_column)  # [n_rows]
+
+    for col in selected_cols:
         series = df[col]
 
         # Build value → node-index mapping; NaN gets its own node

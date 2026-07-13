@@ -27,7 +27,7 @@ def make_tabular_features(
     Args:
         df:                   Input DataFrame.
         exclude_cols:         Columns to drop before processing — typically the
-                              target column and the Stage-1 selected columns
+                              target column and the autoGrable-selected columns
                               (those are already represented in the graph).
         numeric_fill:         NaN strategy for numeric columns: "mean" or "zero".
         encode_categoricals:  One-hot encode object / categorical columns.

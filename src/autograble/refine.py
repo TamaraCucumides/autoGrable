@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from .types import Stage2Config
+from .types import RefinementConfig
 from .models.base import BaseHeteroModel
 from .models.gated_gnn import HeteroGatedGNN
 
@@ -18,7 +18,7 @@ from .models.gated_gnn import HeteroGatedGNN
 # ---------------------------------------------------------------------------
 
 @dataclass
-class Stage2Result:
+class RefinementResult:
     model: BaseHeteroModel
     edge_gates: Dict[str, float]    # col -> gate value in (0, 1); {} if model has no gates
     train_losses: List[float]
@@ -30,7 +30,7 @@ class Stage2Result:
 # Gate inspection
 # ---------------------------------------------------------------------------
 
-def gate_summary(result: Stage2Result, threshold: float = 0.2) -> pd.DataFrame:
+def gate_summary(result: RefinementResult, threshold: float = 0.2) -> pd.DataFrame:
     """
     Return a DataFrame summarising each column's learned gate value, sorted
     from most ignored (gate → 0) to most active (gate → 1).
@@ -43,7 +43,7 @@ def gate_summary(result: Stage2Result, threshold: float = 0.2) -> pd.DataFrame:
                  "active"   if gate >= 0.5
 
     Args:
-        result:    Stage2Result from fit_stage2() or fit_gated_gnn()
+        result:    RefinementResult from fit_refinement() or fit_gated_gnn()
         threshold: gate value below which a column is labelled "ignored" (default 0.2)
     """
     if not result.edge_gates:
@@ -71,18 +71,20 @@ def gate_summary(result: Stage2Result, threshold: float = 0.2) -> pd.DataFrame:
 # Fitting
 # ---------------------------------------------------------------------------
 
-def fit_stage2(
+def fit_refinement(
     graph_train: HeteroData,
     y_train: torch.Tensor,
-    config: Stage2Config,
+    config: RefinementConfig,
     model_cls: Type[BaseHeteroModel] = HeteroGatedGNN,
     x_tab_train: Optional[torch.Tensor] = None,
     graph_val: Optional[HeteroData] = None,
     y_val: Optional[torch.Tensor] = None,
     x_tab_val: Optional[torch.Tensor] = None,
-) -> Stage2Result:
+) -> RefinementResult:
     """
-    Build and train any BaseHeteroModel in an inductive fashion.
+    Optional parametric refinement: build and train any BaseHeteroModel in
+    an inductive fashion on top of the graph induced by autoGrable's
+    selected structural columns.
 
     Each split is a separate graph — no masks. The model generalises to
     val/test graphs because it uses feature-based (not ID-based) node
@@ -92,7 +94,7 @@ def fit_stage2(
         graph_train:   HeteroData for the training split.
         y_train:       Labels for all row nodes in graph_train.
                        Long tensor for classification, float for regression.
-        config:        Stage2Config.
+        config:        RefinementConfig.
         model_cls:     Model class to instantiate (default: HeteroGatedGNN).
         x_tab_train:   Optional tabular features [n_train, D] for the head.
         graph_val:     Optional HeteroData for the validation split.
@@ -158,7 +160,7 @@ def fit_stage2(
                 pred_val = out_val if config.task == "classification" else out_val.squeeze()
                 val_losses.append(float(loss_fn(pred_val, y_val).item()))
 
-    return Stage2Result(
+    return RefinementResult(
         model=model,
         edge_gates=model.gate_values(),
         train_losses=train_losses,
@@ -179,14 +181,14 @@ def fit_stage2(
 def fit_gated_gnn(
     graph_train: HeteroData,
     y_train: torch.Tensor,
-    config: Stage2Config,
+    config: RefinementConfig,
     x_tab_train: Optional[torch.Tensor] = None,
     graph_val: Optional[HeteroData] = None,
     y_val: Optional[torch.Tensor] = None,
     x_tab_val: Optional[torch.Tensor] = None,
-) -> Stage2Result:
-    """Convenience wrapper for fit_stage2 with model_cls=HeteroGatedGNN."""
-    return fit_stage2(
+) -> RefinementResult:
+    """Convenience wrapper for fit_refinement with model_cls=HeteroGatedGNN."""
+    return fit_refinement(
         graph_train, y_train, config,
         model_cls=HeteroGatedGNN,
         x_tab_train=x_tab_train,

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from ..types import Stage2Config
+from ..types import RefinementConfig
 from .base import BaseHeteroModel, _key
 
 
@@ -45,7 +45,7 @@ class HeteroGatedGNN(BaseHeteroModel):
         col_sizes: Dict[str, int],  # kept for API consistency, not used
         num_rows: int,              # kept for API consistency, not used
         num_out: int,
-        config: Stage2Config,
+        config: RefinementConfig,
         tab_dim: int = 0,
         row_feat_dim: int = 0,
     ):

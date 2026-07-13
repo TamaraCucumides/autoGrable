@@ -3,27 +3,36 @@ from __future__ import annotations
 from typing import Optional, List
 import pandas as pd
 
-from .types import Stage1Config, Stage1Result
+from .types import AutoGrableConfig, AutoGrableResult
 from .candidates import select_candidate_columns
 from .utils import train_val_split, safe_fill_for_grouping, cardinality_encode, apply_cardinality_encode
-from .stage1_core import greedy_backward_elimination, build_block_probas
+from .selection import greedy_selection, build_block_probas
 
 
-def fit_structure_stage1(
+def fit_autograble(
     df: pd.DataFrame,
-    config: Stage1Config,
+    config: AutoGrableConfig,
     df_val: Optional[pd.DataFrame] = None,
-) -> Stage1Result:
+) -> AutoGrableResult:
     """
-    Stage 1 (classification): greedy backward elimination over structural columns.
+    autoGrable (classification): greedy structural column selection.
 
     - Induces a partition via equality on selected columns S
     - Learns block-conditional class probabilities on TRAIN
     - Minimizes J(S) = val_loss + lambda * Omega(sample, pi)
+    - config.direction picks the search strategy:
+        "backward" (default): start from all columns selected and greedily
+            drop the column whose removal improves J the most.
+        "forward": start from 0 columns selected (single block) and
+            greedily add the column whose inclusion improves J the most.
+
+    This is the core algorithm. The optional refine module (fit_refinement)
+    can further train a parametric GNN on top of the resulting partition,
+    but is not required to use the structural result on its own.
 
     Args:
         df:     Training DataFrame (always required).
-        config: Stage1Config.
+        config: AutoGrableConfig.
         df_val: Optional external validation DataFrame. When provided, the
                 internal train/val split (config.val_frac) is skipped and
                 df_val is used directly for lambda selection. Cardinality
@@ -50,7 +59,7 @@ def fit_structure_stage1(
 
     n = len(df)
     if n < 2:
-        raise ValueError("Need at least 2 rows to run Stage 1.")
+        raise ValueError("Need at least 2 rows to run autoGrable.")
 
     if df_val is not None:
         df_train = df
@@ -67,12 +76,13 @@ def fit_structure_stage1(
     X_train = safe_fill_for_grouping(df_train[eligible_cols])
     X_val = safe_fill_for_grouping(df_val_split[eligible_cols])
 
-    selected_cols, dropped_cols, history, _final_eval = greedy_backward_elimination(
+    selected_cols, dropped_cols, history, _final_eval = greedy_selection(
         X_train=X_train,
         y_train=y_train,
         X_val=X_val,
         y_val=y_val,
         initial_cols=eligible_cols,
+        direction=config.direction,
         lambda_=config.lambda_,
         loss_name=config.loss_name,
         omega_on=config.omega_on,
@@ -83,7 +93,7 @@ def fit_structure_stage1(
     # Fit final block model on TRAIN for selected columns
     block_probas, global_proba = build_block_probas(X_train, y_train, selected_cols)
 
-    return Stage1Result(
+    return AutoGrableResult(
         selected_cols=selected_cols,
         dropped_cols=dropped_cols,
         history=history,
@@ -103,6 +113,7 @@ def fit_structure_stage1(
             "max_steps": config.max_steps,
             "omega_on": config.omega_on,
             "cardinality_encoding": config.cardinality_encoding,
+            "direction": config.direction,
         },
         cardinality_maps=cardinality_maps,
     )

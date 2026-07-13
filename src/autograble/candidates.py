@@ -20,7 +20,7 @@ def select_candidate_columns(
 ) -> Tuple[List[str], Dict[str, List[str]]]:
     """
     Returns:
-      eligible_cols: columns allowed to participate in Stage-1 structure
+      eligible_cols: columns allowed to participate in autoGrable structure
       excluded_by_rule: audit trail of what got excluded and why
 
     If candidate_cols is provided: it's the initial eligible set (minus rules/overrides).

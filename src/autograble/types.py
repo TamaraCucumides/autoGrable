@@ -6,7 +6,7 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
-class Stage1Config:
+class AutoGrableConfig:
     y_col: str
     candidate_cols: Optional[List[str]] = None
     force_include: Optional[List[str]] = None
@@ -23,11 +23,14 @@ class Stage1Config:
     omega_on: str = "train"      # "train" (recommended) or "val"
     cardinality_encoding: bool = False
 
+    direction: str = "backward"  # "backward" (start from all cols, drop) or
+                                  # "forward" (start from 0 cols, add)
+
 
 @dataclass
-class Stage1Result:
+class AutoGrableResult:
     selected_cols: List[str]
-    dropped_cols: List[str]
+    dropped_cols: List[str]  # backward: cols removed; forward: cols never added
     history: List[Dict[str, Any]]
     excluded_by_rule: Dict[str, List[str]]
 
@@ -43,7 +46,7 @@ class Stage1Result:
 
 
 @dataclass(frozen=True)
-class Stage2Config:
+class RefinementConfig:
     hidden_dim: int = 64
     num_layers: int = 3           # GRU unroll steps
     dropout: float = 0.0

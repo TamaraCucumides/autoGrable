@@ -1,17 +1,17 @@
-from .types import Stage1Config, Stage1Result, Stage2Config
-from .stage1 import fit_structure_stage1
+from .types import AutoGrableConfig, AutoGrableResult, RefinementConfig
+from .core import fit_autograble
 from .graph import build_hetero_graph
-from .stage2 import Stage2Result, fit_stage2, fit_gated_gnn, gate_summary
+from .refine import RefinementResult, fit_refinement, fit_gated_gnn, gate_summary
 from .preprocess import make_tabular_features
 from .models import BaseHeteroModel, HeteroGatedGNN, MODELS
 
 __all__ = [
-    # Stage 1
-    "Stage1Config", "Stage1Result", "fit_structure_stage1",
+    # Core: autoGrable structural partition selection
+    "AutoGrableConfig", "AutoGrableResult", "fit_autograble",
     # Graph builder
     "build_hetero_graph",
-    # Stage 2
-    "Stage2Config", "Stage2Result", "fit_stage2", "fit_gated_gnn", "gate_summary",
+    # Refinement (optional): parametric GNN trained on top of the selected structure
+    "RefinementConfig", "RefinementResult", "fit_refinement", "fit_gated_gnn", "gate_summary",
     # Models
     "BaseHeteroModel", "HeteroGatedGNN", "MODELS",
     # Preprocessing
