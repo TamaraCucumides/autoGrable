@@ -27,6 +27,7 @@ def build_hetero_graph(
     selected_cols: List[str],
     other_columns: Optional[List[str]] = None,
     temporal_column: Optional[str] = None,
+    zero_time_value_nodes: bool = False,
     numeric_fill: str = "mean",
     encode_categoricals: bool = True,
     max_cardinality: int = 50,
@@ -65,6 +66,13 @@ def build_hetero_graph(
                           use however it needs to (e.g. to prevent leakage). Not
                           folded into data["row"].x and not imputed/normalised
                           here.
+        zero_time_value_nodes: When True (and temporal_column is set), give
+                          every non-row (value) node a time of 0 — i.e.
+                          data[col].time = zeros. Since value nodes always
+                          predate any row timestamp, this keeps them eligible
+                          as neighbors under temporal neighbor sampling
+                          (which typically requires neighbor time <= seed
+                          time), regardless of when the row itself occurred.
         numeric_fill:        Passed through to make_tabular_features.
         encode_categoricals:  Passed through to make_tabular_features.
         max_cardinality:      Passed through to make_tabular_features.
@@ -96,6 +104,9 @@ def build_hetero_graph(
         data[col].values = [
             "__NaN__" if pd.isna(v) else str(v) for v in unique_vals
         ]
+
+        if zero_time_value_nodes and temporal_column is not None:
+            data[col].time = torch.zeros(len(unique_vals), dtype=torch.float)
 
         # Build edge index (row-node → value-node)
         src, dst = [], []
