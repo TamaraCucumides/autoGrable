@@ -38,6 +38,8 @@ def build_hetero_graph(
     numeric_fill: str = "mean",
     encode_categoricals: bool = True,
     max_cardinality: int = 50,
+    target_column: Optional[str] = None,
+    task: str = "classification",
 ) -> Tuple[HeteroData, Dict[str, List[str]]]:
     """
     Build a bipartite HeteroData graph over a set of selected columns.
@@ -51,9 +53,10 @@ def build_hetero_graph(
       (<col>, "rev_has", "row") — reverse
 
     Value-node identifier:
-      data[col].x — [num_nodes] long tensor of node-id indices (0..num_nodes-1),
-      for an nn.Embedding lookup in the hetero GNN, since value nodes are
-      categorical and have no tabular features of their own.
+      data[col].x — [num_nodes, 1] float32 tensor, all zeros. Value nodes are
+      categorical and have no tabular features of their own; message passing
+      (not x) is what differentiates them. Kept 2D float32 rather than
+      omitted so every node type has a uniformly-shaped, sampler-safe x.
       The human-readable values themselves (str representations, NaN as
       "__NaN__") are returned separately as value_vocab[col], in node-index
       order — kept off the HeteroData node stores because PyG's sampling
@@ -62,7 +65,17 @@ def build_hetero_graph(
       silently misbehaves) on a plain list of strings.
 
     Row-node features (data["row"].x), when produced, come from tabularising
-    other_columns via make_tabular_features (numeric / one-hot).
+    other_columns via make_tabular_features (numeric / one-hot); already a
+    2D float32 tensor of shape [n_rows, D].
+
+    Row-node target (data["row"].y), when target_column is given, is read
+    directly from df[target_column] — it must already be numerically encoded
+    (e.g. via sklearn's LabelEncoder, fit once on the training split and
+    reused across val/test) since each split is built into its own
+    independent graph and encoding a target per-split here could assign
+    different ids to the same class across splits. dtype follows task:
+    torch.long for "classification" (CrossEntropyLoss), torch.float32 for
+    "regression" or binary classification with BCEWithLogitsLoss.
 
     Row-node temporal metadata (data["row"].time), when produced, is a
     [n_rows] long tensor of whole seconds-since-epoch — kept separate from
@@ -94,11 +107,19 @@ def build_hetero_graph(
         numeric_fill:        Passed through to make_tabular_features.
         encode_categoricals:  Passed through to make_tabular_features.
         max_cardinality:      Passed through to make_tabular_features.
+        target_column:   Optional column stored as data["row"].y. Must already
+                          be numerically encoded (see note above). When None,
+                          no y is added.
+        task:            "classification" (data["row"].y -> torch.long, for
+                          CrossEntropyLoss) or "regression" (data["row"].y ->
+                          torch.float32); shape [n_rows] either way, matching
+                          fit_refinement's loss_fn(pred, y) usage. Ignored
+                          when target_column is None.
 
     Returns:
         (data, value_vocab) where value_vocab maps each selected column to
         its list of value strings in node-index order (value_vocab[col][i]
-        is the human-readable identity of data[col].x == i).
+        is the human-readable identity of value node i of that column).
     """
     data = HeteroData()
     data["row"].num_nodes = len(df)
@@ -115,6 +136,10 @@ def build_hetero_graph(
     if temporal_column is not None:
         data["row"].time = _encode_temporal(df, temporal_column)  # [n_rows]
 
+    if target_column is not None:
+        y_dtype = torch.long if task == "classification" else torch.float32
+        data["row"].y = torch.tensor(df[target_column].values, dtype=y_dtype)  # [n_rows]
+
     for col in selected_cols:
         series = df[col]
 
@@ -128,9 +153,10 @@ def build_hetero_graph(
         value_vocab[col] = [
             "__NaN__" if pd.isna(v) else str(v) for v in unique_vals
         ]
-        # Node-id index per value node, for an nn.Embedding lookup in the
-        # hetero GNN (value nodes are categorical — no tabular features).
-        data[col].x = torch.arange(len(unique_vals), dtype=torch.long)
+        # Value nodes are categorical and have no tabular features of their
+        # own; kept as a zero-filled 2D float32 tensor (rather than omitted)
+        # so every node type has a uniformly-shaped, sampler-safe x.
+        data[col].x = torch.zeros((len(unique_vals), 1), dtype=torch.float32)
 
         if zero_time_value_nodes and temporal_column is not None:
             data[col].time = torch.zeros(len(unique_vals), dtype=torch.long)

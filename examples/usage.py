@@ -62,34 +62,50 @@ print("Selected columns:", result.selected_cols)
 print("Dropped  columns:", result.dropped_cols)
 
 # ---------------------------------------------------------------------------
-# 2. Build one graph per split (inductive)
+# 2. Prepare labels
+# ---------------------------------------------------------------------------
+# Fit the encoder once on df_train and reuse it for val/test: build_hetero_graph
+# builds each split into its own independent graph, so encoding the target
+# per-split would risk assigning different ids to the same class across splits.
+
+le = LabelEncoder().fit(df_train[TARGET])
+ENCODED_TARGET = f"{TARGET}__encoded"
+
+for split in (df_train, df_val, df_test):
+    split[ENCODED_TARGET] = le.transform(split[TARGET])
+
+# ---------------------------------------------------------------------------
+# 3. Build one graph per split (inductive)
 # ---------------------------------------------------------------------------
 # Each graph is independent — val/test may contain values never seen in train.
 # other_columns are tabularised internally and stored as data["row"].x, used
 # for row-node initialisation in the GNN. temporal_column (e.g. a transaction
 # date) is stored separately as data["row"].time metadata — not folded into
 # x — so training code can use it explicitly (e.g. to prevent leakage).
+# target_column stores the pre-encoded label as data["row"].y.
 
-other_columns = [c for c in df.columns if c not in [TARGET] + result.selected_cols]
+other_columns = [
+    c for c in df.columns if c not in [TARGET, ENCODED_TARGET] + result.selected_cols
+]
 
-graph_train, vocab_train = build_hetero_graph(df_train, result.selected_cols, other_columns=other_columns)
-graph_val,   vocab_val   = build_hetero_graph(df_val,   result.selected_cols, other_columns=other_columns)
-graph_test,  vocab_test  = build_hetero_graph(df_test,  result.selected_cols, other_columns=other_columns)
+graph_train, vocab_train = build_hetero_graph(
+    df_train, result.selected_cols, other_columns=other_columns,
+    target_column=ENCODED_TARGET, task="classification",
+)
+graph_val, vocab_val = build_hetero_graph(
+    df_val, result.selected_cols, other_columns=other_columns,
+    target_column=ENCODED_TARGET, task="classification",
+)
+graph_test, vocab_test = build_hetero_graph(
+    df_test, result.selected_cols, other_columns=other_columns,
+    target_column=ENCODED_TARGET, task="classification",
+)
 
 print(graph_train)
 
-# ---------------------------------------------------------------------------
-# 3. Prepare labels
-# ---------------------------------------------------------------------------
-
-le = LabelEncoder().fit(df_train[TARGET])
-
-def encode_y(df):
-    return torch.tensor(le.transform(df[TARGET]), dtype=torch.long)
-
-y_train = encode_y(df_train)
-y_val   = encode_y(df_val)
-y_test  = encode_y(df_test)
+y_train = graph_train["row"].y
+y_val   = graph_val["row"].y
+y_test  = graph_test["row"].y
 
 # ---------------------------------------------------------------------------
 # 4. Refinement (optional) — inductive Gated GNN
