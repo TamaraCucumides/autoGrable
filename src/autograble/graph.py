@@ -9,17 +9,24 @@ from torch_geometric.data import HeteroData
 from .preprocess import make_tabular_features
 
 
+NAT_TIME = torch.iinfo(torch.long).min
+
+
 def _encode_temporal(df: pd.DataFrame, temporal_column: str) -> torch.Tensor:
     """
-    Convert a datetime column into raw seconds-since-epoch, one value per row.
-    NaT becomes NaN — left for the consumer (loader/model) to handle, not
-    imputed here, since this is metadata rather than a model-ready feature.
+    Convert a datetime column into whole seconds-since-epoch (int64/long),
+    one value per row. int64 (rather than float) is required by PyG's
+    temporal neighbor loaders. NaT becomes NAT_TIME — the minimum representable
+    int64 — so a row with a missing timestamp always sorts before every real
+    timestamp and never spuriously satisfies "neighbor time <= seed time"
+    under temporal neighbor sampling; not imputed to a real time since this
+    is metadata rather than a model-ready feature.
     """
     t = pd.to_datetime(df[temporal_column])
-    t_seconds = t.view("int64").astype(float) / 1e9  # ns -> s since epoch
-    t_seconds[t.isna()] = float("nan")
+    t_seconds = t.view("int64") // 1_000_000_000  # ns -> s since epoch
+    t_seconds[t.isna()] = NAT_TIME
 
-    return torch.tensor(t_seconds.values, dtype=torch.float)  # [n_rows]
+    return torch.tensor(t_seconds.values, dtype=torch.long)  # [n_rows]
 
 
 def build_hetero_graph(
@@ -46,15 +53,22 @@ def build_hetero_graph(
     Value-node identifier:
       data[col].values — list of the original values (str representations), in node-index order
       NaN is represented as the string "__NaN__"
+      data[col].x — [num_nodes] long tensor of node-id indices (0..num_nodes-1),
+      for an nn.Embedding lookup in the hetero GNN, since value nodes are
+      categorical and have no tabular features of their own.
 
     Row-node features (data["row"].x), when produced, come from tabularising
     other_columns via make_tabular_features (numeric / one-hot).
 
     Row-node temporal metadata (data["row"].time), when produced, is a
-    [n_rows] tensor of seconds-since-epoch — kept separate from data["row"].x
-    so a downstream loader/model can use it explicitly (e.g. to order or mask
-    rows by time) rather than it being an opaque column buried in the tabular
-    feature block.
+    [n_rows] long tensor of whole seconds-since-epoch — kept separate from
+    data["row"].x so a downstream loader/model can use it explicitly (e.g.
+    PyG's temporal NeighborLoader, which requires an int64 time_attr) rather
+    than it being an opaque column buried in the tabular feature block.
+    Missing timestamps (NaT) are encoded as NAT_TIME (torch.iinfo(int64).min)
+    rather than NaN, since int64 can't represent NaN; this sentinel sorts
+    before every real timestamp so it never spuriously satisfies "neighbor
+    time <= seed time" under temporal sampling.
 
     Args:
         df:              DataFrame for this split.
@@ -65,10 +79,10 @@ def build_hetero_graph(
                           (data["row"].time), for the consuming loader/model to
                           use however it needs to (e.g. to prevent leakage). Not
                           folded into data["row"].x and not imputed/normalised
-                          here.
+                          here (NaT -> NAT_TIME sentinel; see above).
         zero_time_value_nodes: When True (and temporal_column is set), give
                           every non-row (value) node a time of 0 — i.e.
-                          data[col].time = zeros. Since value nodes always
+                          data[col].time = zeros (long). Since value nodes always
                           predate any row timestamp, this keeps them eligible
                           as neighbors under temporal neighbor sampling
                           (which typically requires neighbor time <= seed
@@ -104,9 +118,12 @@ def build_hetero_graph(
         data[col].values = [
             "__NaN__" if pd.isna(v) else str(v) for v in unique_vals
         ]
+        # Node-id index per value node, for an nn.Embedding lookup in the
+        # hetero GNN (value nodes are categorical — no tabular features).
+        data[col].x = torch.arange(len(unique_vals), dtype=torch.long)
 
         if zero_time_value_nodes and temporal_column is not None:
-            data[col].time = torch.zeros(len(unique_vals), dtype=torch.float)
+            data[col].time = torch.zeros(len(unique_vals), dtype=torch.long)
 
         # Build edge index (row-node → value-node)
         src, dst = [], []
