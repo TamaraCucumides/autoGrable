@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import torch
@@ -38,7 +38,7 @@ def build_hetero_graph(
     numeric_fill: str = "mean",
     encode_categoricals: bool = True,
     max_cardinality: int = 50,
-) -> HeteroData:
+) -> Tuple[HeteroData, Dict[str, List[str]]]:
     """
     Build a bipartite HeteroData graph over a set of selected columns.
 
@@ -51,11 +51,15 @@ def build_hetero_graph(
       (<col>, "rev_has", "row") — reverse
 
     Value-node identifier:
-      data[col].values — list of the original values (str representations), in node-index order
-      NaN is represented as the string "__NaN__"
       data[col].x — [num_nodes] long tensor of node-id indices (0..num_nodes-1),
       for an nn.Embedding lookup in the hetero GNN, since value nodes are
       categorical and have no tabular features of their own.
+      The human-readable values themselves (str representations, NaN as
+      "__NaN__") are returned separately as value_vocab[col], in node-index
+      order — kept off the HeteroData node stores because PyG's sampling
+      loaders (e.g. NeighborLoader) index-select every node-store attribute
+      by the sampled node ids, which requires a tensor and breaks (or
+      silently misbehaves) on a plain list of strings.
 
     Row-node features (data["row"].x), when produced, come from tabularising
     other_columns via make_tabular_features (numeric / one-hot).
@@ -90,9 +94,15 @@ def build_hetero_graph(
         numeric_fill:        Passed through to make_tabular_features.
         encode_categoricals:  Passed through to make_tabular_features.
         max_cardinality:      Passed through to make_tabular_features.
+
+    Returns:
+        (data, value_vocab) where value_vocab maps each selected column to
+        its list of value strings in node-index order (value_vocab[col][i]
+        is the human-readable identity of data[col].x == i).
     """
     data = HeteroData()
     data["row"].num_nodes = len(df)
+    value_vocab: Dict[str, List[str]] = {}
 
     if other_columns:
         data["row"].x = make_tabular_features(
@@ -115,7 +125,7 @@ def build_hetero_graph(
         }
 
         data[col].num_nodes = len(unique_vals)
-        data[col].values = [
+        value_vocab[col] = [
             "__NaN__" if pd.isna(v) else str(v) for v in unique_vals
         ]
         # Node-id index per value node, for an nn.Embedding lookup in the
@@ -137,4 +147,4 @@ def build_hetero_graph(
         data["row", "has", col].edge_index = edge_index
         data[col, "rev_has", "row"].edge_index = edge_index.flip(0)
 
-    return data
+    return data, value_vocab

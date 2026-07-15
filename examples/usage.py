@@ -72,9 +72,9 @@ print("Dropped  columns:", result.dropped_cols)
 
 other_columns = [c for c in df.columns if c not in [TARGET] + result.selected_cols]
 
-graph_train = build_hetero_graph(df_train, result.selected_cols, other_columns=other_columns)
-graph_val   = build_hetero_graph(df_val,   result.selected_cols, other_columns=other_columns)
-graph_test  = build_hetero_graph(df_test,  result.selected_cols, other_columns=other_columns)
+graph_train, vocab_train = build_hetero_graph(df_train, result.selected_cols, other_columns=other_columns)
+graph_val,   vocab_val   = build_hetero_graph(df_val,   result.selected_cols, other_columns=other_columns)
+graph_test,  vocab_test  = build_hetero_graph(df_test,  result.selected_cols, other_columns=other_columns)
 
 print(graph_train)
 
