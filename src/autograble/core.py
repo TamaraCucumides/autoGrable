@@ -49,6 +49,9 @@ def fit_autograble(
         ),
         exclude_near_unique=config.drop_near_unique_cols,
         unique_frac_threshold=config.near_unique_threshold,
+        exclude_high_cardinality_object=config.drop_high_cardinality_object_cols,
+        object_unique_frac_threshold=config.object_unique_frac_threshold,
+        exclude_datetimes=config.drop_datetime_cols,
     )
 
     # Cardinality encoding: computed on train, optionally applied to df_val
@@ -118,6 +121,9 @@ def fit_autograble(
             "drop_key_like_cols": config.drop_key_like_cols,
             "drop_near_unique_cols": config.drop_near_unique_cols,
             "near_unique_threshold": config.near_unique_threshold,
+            "drop_high_cardinality_object_cols": config.drop_high_cardinality_object_cols,
+            "object_unique_frac_threshold": config.object_unique_frac_threshold,
+            "drop_datetime_cols": config.drop_datetime_cols,
         },
         cardinality_maps=cardinality_maps,
     )

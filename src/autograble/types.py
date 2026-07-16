@@ -29,6 +29,11 @@ class AutoGrableConfig:
     drop_near_unique_cols: bool = True   # exclude near-unique columns (likely keys)
     near_unique_threshold: float = 0.98  # frac of distinct values that counts as "near-unique"
 
+    drop_high_cardinality_object_cols: bool = True   # exclude high-cardinality object/text cols
+    object_unique_frac_threshold: float = 0.80       # frac of distinct values that triggers it
+
+    drop_datetime_cols: bool = True  # exclude datetime-dtype columns
+
     direction: str = "backward"  # "backward" (start from all cols, drop) or
                                   # "forward" (start from 0 cols, add)
 
