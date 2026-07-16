@@ -26,10 +26,6 @@ def fit_autograble(
         "forward": start from 0 columns selected (single block) and
             greedily add the column whose inclusion improves J the most.
 
-    This is the core algorithm. The optional refine module (fit_refinement)
-    can further train a parametric GNN on top of the resulting partition,
-    but is not required to use the structural result on its own.
-
     Args:
         df:     Training DataFrame (always required).
         config: AutoGrableConfig.
@@ -48,6 +44,11 @@ def fit_autograble(
         candidate_cols=config.candidate_cols,
         force_include=config.force_include,
         force_exclude=config.force_exclude,
+        name_hint_exclude=() if not config.drop_key_like_cols else (
+            "id", "uuid", "guid", "hash", "session", "token"
+        ),
+        exclude_near_unique=config.drop_near_unique_cols,
+        unique_frac_threshold=config.near_unique_threshold,
     )
 
     # Cardinality encoding: computed on train, optionally applied to df_val
@@ -114,6 +115,9 @@ def fit_autograble(
             "omega_on": config.omega_on,
             "cardinality_encoding": config.cardinality_encoding,
             "direction": config.direction,
+            "drop_key_like_cols": config.drop_key_like_cols,
+            "drop_near_unique_cols": config.drop_near_unique_cols,
+            "near_unique_threshold": config.near_unique_threshold,
         },
         cardinality_maps=cardinality_maps,
     )

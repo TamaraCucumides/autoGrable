@@ -11,7 +11,7 @@ def make_tabular_features(
     exclude_cols: Optional[List[str]] = None,
     numeric_fill: str = "mean",
     encode_categoricals: bool = True,
-    max_cardinality: int = 50,
+    max_cardinality: int = 100,
 ) -> torch.Tensor:
     """
     Preprocess a DataFrame into a float tensor for use as row node features.

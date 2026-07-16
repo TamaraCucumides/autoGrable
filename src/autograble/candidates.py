@@ -12,6 +12,7 @@ def select_candidate_columns(
     candidate_cols: Optional[Sequence[str]] = None,
     force_include: Optional[Sequence[str]] = None,
     force_exclude: Optional[Sequence[str]] = None,
+    exclude_near_unique: bool = True,
     unique_frac_threshold: float = 0.98,
     object_unique_frac_threshold: float = 0.80,
     exclude_datetimes: bool = True,
@@ -61,11 +62,12 @@ def select_candidate_columns(
             excluded.setdefault("name_hint", []).append(c)
 
     # Rule: near-unique columns
-    for c in list(base_cols):
-        nun = df[c].nunique(dropna=False)
-        if nun / max(n, 1) >= unique_frac_threshold:
-            base_cols.remove(c)
-            excluded.setdefault("near_unique", []).append(c)
+    if exclude_near_unique:
+        for c in list(base_cols):
+            nun = df[c].nunique(dropna=False)
+            if nun / max(n, 1) >= unique_frac_threshold:
+                base_cols.remove(c)
+                excluded.setdefault("near_unique", []).append(c)
 
     # Rule: datetime columns (often near-unique)
 
