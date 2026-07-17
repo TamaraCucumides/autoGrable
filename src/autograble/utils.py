@@ -90,6 +90,32 @@ def apply_cardinality_encode(
     return df
 
 
+def apply_cardinality_encode_transductive(
+    df_val: pd.DataFrame, cols: List[str], train_maps: Dict[str, pd.Series]
+) -> pd.DataFrame:
+    """
+    Encode df_val with counts = (occurrences in train) + (occurrences in df_val),
+    i.e. frequency over df_train UNION df_val (transductive setting).
+
+    Unlike apply_cardinality_encode, a value's code here also reflects how often
+    it appears in df_val itself, not just in train.
+    """
+    df_val = df_val.copy()
+    for col in cols:
+        train_counts = train_maps[col]
+        val_counts = df_val[col].value_counts(dropna=False)
+        train_nan = int(train_counts.get(float("nan"), train_counts.get(None, 0)))
+        val_nan = int(val_counts.get(float("nan"), val_counts.get(None, 0)))
+
+        def _map(v):
+            if pd.isna(v):
+                return train_nan + val_nan
+            return int(train_counts.get(v, 0)) + int(val_counts.get(v, 0))
+
+        df_val[col] = df_val[col].map(_map).astype(int)
+    return df_val
+
+
 def omega_from_group_sizes(group_sizes: np.ndarray) -> float:
     n = float(group_sizes.sum())
     if n <= 0:

@@ -5,7 +5,12 @@ import pandas as pd
 
 from .types import AutoGrableConfig, AutoGrableResult
 from .candidates import select_candidate_columns
-from .utils import train_val_split, safe_fill_for_grouping, cardinality_encode, apply_cardinality_encode
+from .utils import (
+    train_val_split,
+    safe_fill_for_grouping,
+    cardinality_encode,
+    apply_cardinality_encode_transductive,
+)
 from .selection import greedy_selection, build_block_probas
 
 
@@ -32,7 +37,8 @@ def fit_autograble(
         df_val: Optional external validation DataFrame. When provided, the
                 internal train/val split (config.val_frac) is skipped and
                 df_val is used directly for lambda selection. Cardinality
-                maps are computed from df (train) and applied to df_val.
+                maps are computed from df (train) alone; df_val is then
+                encoded transductively, with counts over df UNION df_val.
     """
     y_col = config.y_col
     if y_col not in df.columns:
@@ -54,12 +60,14 @@ def fit_autograble(
         exclude_datetimes=config.drop_datetime_cols,
     )
 
-    # Cardinality encoding: computed on train, optionally applied to df_val
+    # Cardinality encoding: df (train) is encoded from its own frequencies.
+    # df_val, when given, is encoded transductively — each value's count
+    # includes its occurrences in both df (train) and df_val.
     cardinality_maps = None
     if config.cardinality_encoding:
         df, cardinality_maps = cardinality_encode(df, eligible_cols)
         if df_val is not None:
-            df_val = apply_cardinality_encode(df_val, eligible_cols, cardinality_maps)
+            df_val = apply_cardinality_encode_transductive(df_val, eligible_cols, cardinality_maps)
 
     n = len(df)
     if n < 2:
