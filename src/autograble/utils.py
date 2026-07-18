@@ -66,7 +66,7 @@ def cardinality_encode(
     maps: Dict[str, pd.Series] = {}
     for col in cols:
         maps[col] = df[col].value_counts(dropna=False)
-        df[col] = df.groupby(col, dropna=False)[col].transform("size").astype(int)
+        df[col] = df.groupby(col, dropna=False, observed=False)[col].transform("size").astype(int)
     return df, maps
 
 

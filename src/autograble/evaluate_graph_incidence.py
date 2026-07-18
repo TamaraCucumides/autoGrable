@@ -117,7 +117,7 @@ def projection_partition_pandas(df, selected_cols: Sequence[Hashable]):
     if not cols:
         return {i: 0 for i in range(len(df))}
     # ngroup gives a contiguous integer block id per row; dropna=False keeps nulls
-    codes = df.groupby(cols, sort=False, dropna=False).ngroup().to_numpy()
+    codes = df.groupby(cols, sort=False, dropna=False, observed=False).ngroup().to_numpy()
     return {i: int(codes[i]) for i in range(len(codes))}
 
 
