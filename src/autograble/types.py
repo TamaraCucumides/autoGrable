@@ -45,6 +45,12 @@ class AutoGrableResult:
     history: List[Dict[str, Any]]
     excluded_by_rule: Dict[str, List[str]]
 
+    # J, val_loss, omega from the last effective step (last added/dropped
+    # column) in history — i.e. the state selected_cols was chosen at
+    final_J: float
+    final_val_loss: float
+    final_omega: float
+
     # learned block model on TRAIN for the final selected columns
     block_probas: pd.DataFrame  # index = block key (MultiIndex), columns = classes, values = probs
     global_proba: pd.Series     # class priors on train

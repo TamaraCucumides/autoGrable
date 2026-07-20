@@ -88,7 +88,7 @@ def fit_autograble(
     X_train = safe_fill_for_grouping(df_train[eligible_cols])
     X_val = safe_fill_for_grouping(df_val_split[eligible_cols])
 
-    selected_cols, dropped_cols, history, _final_eval = greedy_selection(
+    selected_cols, dropped_cols, history, final_eval = greedy_selection(
         X_train=X_train,
         y_train=y_train,
         X_val=X_val,
@@ -110,6 +110,9 @@ def fit_autograble(
         dropped_cols=dropped_cols,
         history=history,
         excluded_by_rule=excluded_by_rule,
+        final_J=final_eval["J"],
+        final_val_loss=final_eval["val_loss"],
+        final_omega=final_eval["omega"],
         block_probas=block_probas,
         global_proba=global_proba,
         config={
