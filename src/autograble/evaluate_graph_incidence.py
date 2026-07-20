@@ -20,9 +20,7 @@ Why the general path's knobs disappear here:
   breaks and you must fall back to j_metric.compute_J. Binning is supported below
   via bin_fns (Def. 3.3), which just coarsens the projection.
 
-Single-table only. The relational setting (expanded table T~) additionally needs
-within-block deduplication + multiplicity-normalised loss (App. E) — NOT handled
-here; see TODO at the bottom.
+Single-table only.
 """
 
 from __future__ import annotations
@@ -119,22 +117,3 @@ def projection_partition_pandas(df, selected_cols: Sequence[Hashable]):
     # ngroup gives a contiguous integer block id per row; dropna=False keeps nulls
     codes = df.groupby(cols, sort=False, dropna=False, observed=False).ngroup().to_numpy()
     return {i: int(codes[i]) for i in range(len(codes))}
-
-
-# --------------------------------------------------------------------------- #
-# usage sketch (delete once wired up)
-# --------------------------------------------------------------------------- #
-if __name__ == "__main__":
-    # rows   : full table as list of dicts, OR a pandas DataFrame
-    # S      : the selected columns (Stage-1 output, or any candidate to score)
-    #
-    # res = compute_J_incidence(rows, selected_cols=S, labels=labels,
-    #                           train_idx=tr, val_idx=va, lam=1.0)
-    # print(res.J, res.risk_val, res.omega, res.num_blocks)
-    #
-    # This is exactly the score Stage-1 greedy minimises over S, so you can also
-    # use it to sweep lambda and watch |pi_S| / Risk_val / Omega move together.
-    #
-    # TODO(relational): for the expanded table T~, replace projection_partition
-    # with the dedup'd version and swap in the multiplicity-normalised loss (App. E).
-    pass
