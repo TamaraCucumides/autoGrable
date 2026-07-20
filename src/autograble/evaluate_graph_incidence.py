@@ -138,13 +138,12 @@ def compute_J_incidence_from_df(
                 True  -> each selected column is first replaced by its
                 value's frequency count (the "frequencies dataframe"), the
                 same transform fit_autograble applies when its
-                cardinality_encoding config flag is set:
-                  * df_val given: counts are fit on df_train, then df_val is
-                    encoded transductively (counts over df_train UNION
-                    df_val), via utils.apply_cardinality_encode_transductive.
-                  * df_val omitted: the whole df_train is encoded first and
-                    THEN split, so counts already reflect both resulting
-                    partitions (matches fit_autograble's internal-split path).
+                cardinality_encoding config flag is set: counts are fit on
+                the train split ONLY (counts_train), then the val split is
+                encoded transductively (counts over train UNION val), via
+                utils.apply_cardinality_encode_transductive. This holds
+                whether df_val is given explicitly or drawn from an internal
+                split of df_train — the split always happens BEFORE encoding.
     lam, loss, bin_fns : forwarded to compute_J_incidence.
 
     Returns the same JResult as compute_J_incidence.
@@ -157,13 +156,6 @@ def compute_J_incidence_from_df(
     if df_val is not None:
         df_val = df_val.copy()
 
-    if cardinality_encoding:
-        if df_val is not None:
-            df_train, maps = cardinality_encode(df_train, cols)
-            df_val = apply_cardinality_encode_transductive(df_val, cols, maps)
-        else:
-            df_train, _maps = cardinality_encode(df_train, cols)
-
     if df_val is not None:
         df_tr, df_va = df_train, df_val
     else:
@@ -172,8 +164,19 @@ def compute_J_incidence_from_df(
         df_tr = df_train.iloc[tr_pos].copy()
         df_va = df_train.iloc[va_pos].copy()
 
+    if cardinality_encoding:
+        df_tr, maps = cardinality_encode(df_tr, cols)
+        df_va = apply_cardinality_encode_transductive(df_va, cols, maps)
+
     df_full = pd.concat([df_tr, df_va], axis=0, ignore_index=True)
-    rows = safe_fill_for_grouping(df_full[cols]).to_dict("records")
+    # NOTE: df_full[[]].to_dict("records") returns [] regardless of row count
+    # (pandas can't infer row count from zero columns) — that would silently
+    # drop every row and desync `rows` from train_idx/val_idx. S=empty is a
+    # valid partition (single block, per Lemma 4.1), so keep one dict per row.
+    if cols:
+        rows = safe_fill_for_grouping(df_full[cols]).to_dict("records")
+    else:
+        rows = [{} for _ in range(len(df_full))]
     labels = df_full[target_col].tolist()
     train_idx = list(range(len(df_tr)))
     val_idx = list(range(len(df_tr), len(df_full)))

@@ -60,15 +60,6 @@ def fit_autograble(
         exclude_datetimes=config.drop_datetime_cols,
     )
 
-    # Cardinality encoding: df (train) is encoded from its own frequencies.
-    # df_val, when given, is encoded transductively — each value's count
-    # includes its occurrences in both df (train) and df_val.
-    cardinality_maps = None
-    if config.cardinality_encoding:
-        df, cardinality_maps = cardinality_encode(df, eligible_cols)
-        if df_val is not None:
-            df_val = apply_cardinality_encode_transductive(df_val, eligible_cols, cardinality_maps)
-
     n = len(df)
     if n < 2:
         raise ValueError("Need at least 2 rows to run autoGrable.")
@@ -80,6 +71,18 @@ def fit_autograble(
         train_idx, val_idx = train_val_split(n, config.val_frac, config.random_state)
         df_train = df.iloc[train_idx].copy()
         df_val_split = df.iloc[val_idx].copy()
+
+    # Cardinality encoding: df_train is encoded from its own frequencies
+    # (counts_train, computed on df_train ONLY). df_val_split is encoded
+    # transductively — each value's count includes its occurrences in both
+    # df_train and df_val_split (counts_union, over df_train UNION df_val).
+    # This is intentionally NOT symmetric: it's what lets two values tied
+    # under counts_train (e.g. equal frequency in train alone) land in
+    # different buckets once the union counts pull them apart.
+    cardinality_maps = None
+    if config.cardinality_encoding:
+        df_train, cardinality_maps = cardinality_encode(df_train, eligible_cols)
+        df_val_split = apply_cardinality_encode_transductive(df_val_split, eligible_cols, cardinality_maps)
 
     y_train = df_train[y_col].copy()
     y_val = df_val_split[y_col].copy()
