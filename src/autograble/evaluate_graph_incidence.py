@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Callable, Hashable, Mapping, Optional, Sequence
 
 # reuse the shared, fully-specified pieces
-from evaluate_graph import (
+from .evaluate_graph import (
     JResult,
     Label,
     Color,
