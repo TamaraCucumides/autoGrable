@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import Callable, Hashable, Mapping, Optional, Sequence
 
+import pandas as pd
+
 # reuse the shared, fully-specified pieces
 from .evaluate_graph import (
     JResult,
@@ -36,6 +38,12 @@ from .evaluate_graph import (
     fit_block_predictor,
     val_risk,
     occupancy,
+)
+from .utils import (
+    train_val_split,
+    safe_fill_for_grouping,
+    cardinality_encode,
+    apply_cardinality_encode_transductive,
 )
 
 Row = Mapping[Hashable, Hashable]
@@ -98,6 +106,87 @@ def compute_J_incidence(
         lam=lam,
         num_blocks=len(set(block_of.values())),
         block_of=block_of,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# stand-alone, DataFrame-native entry point
+# --------------------------------------------------------------------------- #
+def compute_J_incidence_from_df(
+    df_train: pd.DataFrame,
+    target_col: str,
+    selected_cols: Sequence[str],
+    *,
+    df_val: Optional[pd.DataFrame] = None,
+    lam: float = 1.0,
+    loss: str = "log",
+    cardinality_encoding: bool = False,
+    val_frac: float = 0.3,
+    random_state: int = 0,
+    bin_fns: Optional[Mapping[Hashable, Callable[[Hashable], Hashable]]] = None,
+) -> JResult:
+    """DataFrame-native wrapper around compute_J_incidence — no manual
+    rows/labels/train_idx/val_idx plumbing required.
+
+    df_train:   training DataFrame (always required).
+    df_val:     optional external validation DataFrame. When omitted, a
+                train/val split is drawn internally from df_train
+                (val_frac / random_state), mirroring fit_autograble.
+    cardinality_encoding:
+                False (default) -> partition on the raw values in
+                selected_cols (the "value dataframe").
+                True  -> each selected column is first replaced by its
+                value's frequency count (the "frequencies dataframe"), the
+                same transform fit_autograble applies when its
+                cardinality_encoding config flag is set:
+                  * df_val given: counts are fit on df_train, then df_val is
+                    encoded transductively (counts over df_train UNION
+                    df_val), via utils.apply_cardinality_encode_transductive.
+                  * df_val omitted: the whole df_train is encoded first and
+                    THEN split, so counts already reflect both resulting
+                    partitions (matches fit_autograble's internal-split path).
+    lam, loss, bin_fns : forwarded to compute_J_incidence.
+
+    Returns the same JResult as compute_J_incidence.
+    """
+    if target_col not in df_train.columns:
+        raise ValueError(f"Target column {target_col!r} not found in df_train.columns")
+
+    cols = list(selected_cols)
+    df_train = df_train.copy()
+    if df_val is not None:
+        df_val = df_val.copy()
+
+    if cardinality_encoding:
+        if df_val is not None:
+            df_train, maps = cardinality_encode(df_train, cols)
+            df_val = apply_cardinality_encode_transductive(df_val, cols, maps)
+        else:
+            df_train, _maps = cardinality_encode(df_train, cols)
+
+    if df_val is not None:
+        df_tr, df_va = df_train, df_val
+    else:
+        n = len(df_train)
+        tr_pos, va_pos = train_val_split(n, val_frac, random_state)
+        df_tr = df_train.iloc[tr_pos].copy()
+        df_va = df_train.iloc[va_pos].copy()
+
+    df_full = pd.concat([df_tr, df_va], axis=0, ignore_index=True)
+    rows = safe_fill_for_grouping(df_full[cols]).to_dict("records")
+    labels = df_full[target_col].tolist()
+    train_idx = list(range(len(df_tr)))
+    val_idx = list(range(len(df_tr), len(df_full)))
+
+    return compute_J_incidence(
+        rows,
+        cols,
+        labels,
+        train_idx=train_idx,
+        val_idx=val_idx,
+        lam=lam,
+        loss=loss,
+        bin_fns=bin_fns,
     )
 
 
