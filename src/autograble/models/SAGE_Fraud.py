@@ -14,7 +14,8 @@ Design constraints this file is built around:
   3. Loss and metrics are computed on seed nodes only under mini-batching.
 
   4. Binary imbalanced target: single logit, BCEWithLogitsLoss(pos_weight),
-     model selection on validation average precision.
+     model selection on a validation metric (average precision by default;
+     see `SAGEConfig.selection_metric`).
 
 Works with either:
   - a unified transductive HeteroData with train/val/test masks on "row", or
@@ -71,6 +72,8 @@ class SAGEConfig:
 
     pos_weight: Optional[float] = None   # None => neg/pos from train labels
     pos_weight_cap: float = 50.0
+
+    selection_metric: str = "ap"  # "ap" | "auroc" -- metric used for early stopping/model selection
 
     # Expressivity knobs. Both exceed 1-WL. Keep False for headline numbers.
     value_random_hash: bool = False
@@ -210,8 +213,18 @@ class HeteroSAGE(nn.Module):
 
         self.encoder = NodeEncoder(node_types, row_feat_dim, num_value_nodes, cfg)
 
+        # With relation_aggr="cat", HeteroConv concatenates the per-edge-type
+        # outputs at each destination node instead of summing them, so the
+        # conv output width is (#edge types landing on t) * H, not H. Project
+        # back down to H before norm/residual so the rest of the stack can
+        # stay a fixed hidden_dim.
+        in_degree: Dict[str, int] = {}
+        for _, _, dst in edge_types:
+            in_degree[dst] = in_degree.get(dst, 0) + 1
+
         self.convs = nn.ModuleList()
         self.layer_norms = nn.ModuleList()
+        self.relation_projs = nn.ModuleList()
         for _ in range(cfg.num_layers):
             self.convs.append(
                 HeteroConv(
@@ -225,6 +238,18 @@ class HeteroSAGE(nn.Module):
             self.layer_norms.append(
                 nn.ModuleDict({_key(t): _make_norm(cfg.norm, H) for t in node_types})
             )
+            if cfg.relation_aggr == "cat":
+                self.relation_projs.append(
+                    nn.ModuleDict(
+                        {
+                            _key(t): nn.Linear(in_degree[t] * H, H)
+                            for t in node_types
+                            if in_degree.get(t, 0) > 1
+                        }
+                    )
+                )
+            else:
+                self.relation_projs.append(nn.ModuleDict())
 
         self.drop = nn.Dropout(cfg.dropout)
         # Skip from the encoder output: makes the GNN a strict superset of the
@@ -235,7 +260,7 @@ class HeteroSAGE(nn.Module):
     def forward(self, batch: HeteroData) -> Tensor:
         x = self.encoder(batch)
 
-        for conv, norms in zip(self.convs, self.layer_norms):
+        for conv, norms, projs in zip(self.convs, self.layer_norms, self.relation_projs):
             x_new = conv(x, batch.edge_index_dict)
             merged: Dict[str, Tensor] = {}
             for t in x:
@@ -243,6 +268,8 @@ class HeteroSAGE(nn.Module):
                 if h is None:            # no incoming edges in this batch
                     merged[t] = x[t]
                     continue
+                if _key(t) in projs:
+                    h = projs[_key(t)](h)
                 h = norms[_key(t)](h)
                 h = F.relu(h)
                 h = self.drop(h)
@@ -345,7 +372,10 @@ def train_model(
         opt, mode="max", factor=0.5, patience=max(cfg.patience // 4, 3)
     )
 
-    best_ap, best_state, bad = -1.0, None, 0
+    if cfg.selection_metric not in ("ap", "auroc"):
+        raise ValueError(f"selection_metric must be 'ap' or 'auroc', got {cfg.selection_metric!r}")
+
+    best_metric, best_state, bad = -1.0, None, 0
     history = []
 
     for epoch in range(cfg.epochs):
@@ -375,12 +405,12 @@ def train_model(
 
         yv, sv = _predict(model, data, val_loader, val_mask, device)
         m = binary_metrics(yv, sv)
-        sched.step(m["ap"])
+        sched.step(m[cfg.selection_metric])
         history.append({"epoch": epoch, "train_loss": tr_loss, **m})
 
-        improved = m["ap"] > best_ap + 1e-5
+        improved = m[cfg.selection_metric] > best_metric + 1e-5
         if improved:
-            best_ap, bad = m["ap"], 0
+            best_metric, bad = m[cfg.selection_metric], 0
             best_state = copy.deepcopy(model.state_dict())
         else:
             bad += 1
@@ -390,12 +420,12 @@ def train_model(
             print(
                 f"epoch {epoch:4d} | train_loss {tr_loss:.4f} | "
                 f"val_ap {m['ap']:.4f} | val_auroc {m['auroc']:.4f} | "
-                f"best_ap {best_ap:.4f} | bad {bad}/{cfg.patience} {marker}"
+                f"best_{cfg.selection_metric} {best_metric:.4f} | bad {bad}/{cfg.patience} {marker}"
             )
 
         if bad >= cfg.patience:
             if cfg.verbose:
-                print(f"early stopping at epoch {epoch} (no val_ap improvement for {cfg.patience} epochs)")
+                print(f"early stopping at epoch {epoch} (no val_{cfg.selection_metric} improvement for {cfg.patience} epochs)")
             break
 
     model.load_state_dict(best_state)
