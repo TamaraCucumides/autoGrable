@@ -23,16 +23,16 @@ class AutoGrableConfig:
     omega_on: str = "train"      # "train" (recommended) or "val"
     cardinality_encoding: bool = False
 
-    drop_key_like_cols: bool = True  # exclude id/uuid/guid/hash/session/token-like
+    drop_key_like_cols: bool = False  # exclude id/uuid/guid/hash/session/token-like
                                       # columns during candidate selection
 
-    drop_near_unique_cols: bool = True   # exclude near-unique columns (likely keys)
+    drop_near_unique_cols: bool = False   # exclude near-unique columns (likely keys)
     near_unique_threshold: float = 0.98  # frac of distinct values that counts as "near-unique"
 
-    drop_high_cardinality_object_cols: bool = True   # exclude high-cardinality object/text cols
+    drop_high_cardinality_object_cols: bool = False   # exclude high-cardinality object/text cols
     object_unique_frac_threshold: float = 0.80       # frac of distinct values that triggers it
 
-    drop_datetime_cols: bool = True  # exclude datetime-dtype columns
+    drop_datetime_cols: bool = False  # exclude datetime-dtype columns
 
     direction: str = "backward"  # "backward" (start from all cols, drop) or
                                   # "forward" (start from 0 cols, add)
