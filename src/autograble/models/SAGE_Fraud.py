@@ -79,6 +79,9 @@ class SAGEConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 0
 
+    verbose: bool = False        # print per-epoch train/val metrics
+    log_every: int = 1           # print every N epochs when verbose
+
 
 # --------------------------------------------------------------------------- #
 # Modules
@@ -375,13 +378,25 @@ def train_model(
         sched.step(m["ap"])
         history.append({"epoch": epoch, "train_loss": tr_loss, **m})
 
-        if m["ap"] > best_ap + 1e-5:
+        improved = m["ap"] > best_ap + 1e-5
+        if improved:
             best_ap, bad = m["ap"], 0
             best_state = copy.deepcopy(model.state_dict())
         else:
             bad += 1
-            if bad >= cfg.patience:
-                break
+
+        if cfg.verbose and (epoch % cfg.log_every == 0 or improved or bad >= cfg.patience):
+            marker = "*" if improved else ""
+            print(
+                f"epoch {epoch:4d} | train_loss {tr_loss:.4f} | "
+                f"val_ap {m['ap']:.4f} | val_auroc {m['auroc']:.4f} | "
+                f"best_ap {best_ap:.4f} | bad {bad}/{cfg.patience} {marker}"
+            )
+
+        if bad >= cfg.patience:
+            if cfg.verbose:
+                print(f"early stopping at epoch {epoch} (no val_ap improvement for {cfg.patience} epochs)")
+            break
 
     model.load_state_dict(best_state)
 
