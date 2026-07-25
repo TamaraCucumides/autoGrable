@@ -1,6 +1,14 @@
 from .base import BaseHeteroModel
 from .gated_gnn import HeteroGatedGNN
-from .SAGE_Fraud import HeteroSAGE, SAGEConfig, run_seeds, train_model
+from .SAGE_Fraud import (
+    HeteroSAGE,
+    SAGEConfig,
+    _with_seed,
+    apply_row_scaler,
+    fit_row_scaler,
+    run_seeds,
+    train_model,
+)
 
 # Registry: maps model name → class.
 # Add new models here as they are implemented.
@@ -14,4 +22,5 @@ MODELS: dict = {
 __all__ = [
     "BaseHeteroModel", "HeteroGatedGNN", "MODELS",
     "HeteroSAGE", "SAGEConfig", "run_seeds", "train_model",
+    "fit_row_scaler", "apply_row_scaler", "_with_seed",
 ]
