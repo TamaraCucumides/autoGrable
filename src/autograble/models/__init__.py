@@ -22,6 +22,8 @@ from .SAGE_Relbench import (
     HeteroSAGE as HeteroSAGERelbench,
     SAGEConfig as SAGERelbenchConfig,
     _with_seed as _with_seed_relbench,
+    apply_row_scaler as apply_row_scaler_relbench,
+    fit_row_scaler as fit_row_scaler_relbench,
     run_seeds as run_seeds_relbench,
     train_model as train_model_relbench,
 )
@@ -43,5 +45,5 @@ __all__ = [
     "HeteroSAGETabArena", "SAGETabArenaConfig", "run_seeds_tabarena", "train_model_tabarena",
     "fit_row_scaler_tabarena", "apply_row_scaler_tabarena", "_with_seed_tabarena",
     "HeteroSAGERelbench", "SAGERelbenchConfig", "run_seeds_relbench", "train_model_relbench",
-    "_with_seed_relbench",
+    "fit_row_scaler_relbench", "apply_row_scaler_relbench", "_with_seed_relbench",
 ]
